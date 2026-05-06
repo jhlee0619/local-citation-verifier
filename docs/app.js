@@ -1677,6 +1677,37 @@
   if (shouldAutoShowOnboarding())
     setTimeout(() => openOnboardingTour({ force: false }), 500);
 
+  const heroOverviewMq = window.matchMedia("(max-width: 640px)");
+  const heroOverviewToggle = $("#hero-overview-toggle");
+  const heroOverviewPanel = $("#hero-overview");
+  const heroOverviewLabel = $("#hero-overview-toggle-label");
+
+  function syncHeroOverview() {
+    if (!heroOverviewToggle || !heroOverviewPanel || !heroOverviewLabel) return;
+    if (!heroOverviewMq.matches) {
+      heroOverviewPanel.hidden = false;
+      heroOverviewToggle.setAttribute("aria-expanded", "true");
+      heroOverviewToggle.classList.add("is-expanded");
+      heroOverviewLabel.textContent = "About this tool";
+      return;
+    }
+    const expanded = sessionStorage.getItem("bv-hero-overview-expanded") === "1";
+    heroOverviewPanel.hidden = !expanded;
+    heroOverviewToggle.setAttribute("aria-expanded", expanded ? "true" : "false");
+    heroOverviewToggle.classList.toggle("is-expanded", expanded);
+    heroOverviewLabel.textContent = expanded ? "Hide overview" : "About this tool";
+  }
+
+  heroOverviewToggle?.addEventListener("click", () => {
+    if (!heroOverviewMq.matches) return;
+    const curExpanded = heroOverviewToggle.getAttribute("aria-expanded") === "true";
+    sessionStorage.setItem("bv-hero-overview-expanded", curExpanded ? "0" : "1");
+    syncHeroOverview();
+  });
+
+  heroOverviewMq.addEventListener("change", syncHeroOverview);
+  syncHeroOverview();
+
   function esc(str) {
     const d = document.createElement("div");
     d.textContent = str;

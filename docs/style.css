@@ -231,6 +231,53 @@ code {
 [data-theme="light"] .theme-toggle .icon-moon { display: block; }
 :root:not([data-theme]) .theme-toggle .icon-sun { display: block; }
 
+.hero-overview-toggle {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  width: 100%;
+  margin-top: 0.35rem;
+  margin-bottom: 0.25rem;
+  padding: 0.55rem 1rem;
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--text-dim);
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+
+.hero-overview-toggle:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--surface);
+}
+
+.hero-overview-toggle.is-expanded {
+  color: var(--accent);
+  border-color: rgba(91, 141, 239, 0.35);
+}
+
+[data-theme="light"] .hero-overview-toggle.is-expanded {
+  border-color: rgba(59, 111, 224, 0.28);
+}
+
+.hero-overview-chevron {
+  flex-shrink: 0;
+  transition: transform 0.2s ease;
+}
+
+.hero-overview-toggle.is-expanded .hero-overview-chevron {
+  transform: rotate(180deg);
+}
+
+.hero-overview[hidden] {
+  display: none !important;
+}
+
 .hero-tagline {
   color: var(--accent);
   font-size: 1.1rem;
@@ -250,6 +297,12 @@ code {
 .hero-lead strong {
   color: var(--red);
   font-weight: 600;
+}
+
+@media (max-width: 640px) {
+  .hero-overview-toggle {
+    display: flex;
+  }
 }
 
 /* ─── Input tabs ───────────────────────────────────────────────── */
