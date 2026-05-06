@@ -1223,25 +1223,20 @@ code {
   align-items: center;
   justify-content: center;
   gap: 0.35rem;
-  padding: 0.32rem 0.55rem;
-  min-height: 32px;
-  border: 1px solid rgba(91, 141, 239, 0.35);
+  padding: 0.3rem 0.7rem;
+  border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  background: var(--surface);
-  color: var(--accent);
-  font-size: 0.76rem;
-  font-weight: 600;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 0.78rem;
+  font-weight: 500;
   cursor: pointer;
-  transition: border-color 0.15s, background 0.15s, color 0.15s;
-}
-
-[data-theme="light"] .btn-preview-toggle {
-  border-color: rgba(59, 111, 224, 0.28);
+  transition: all 0.15s;
 }
 
 .btn-preview-toggle:hover {
   border-color: var(--accent);
-  background: var(--accent-bg);
+  color: var(--accent);
 }
 
 .btn-preview-toggle-icon {
@@ -1259,6 +1254,65 @@ code {
 
 .preview-panel.is-collapsed {
   max-height: none;
+}
+
+/* Reclaim space when the preview is collapsed: drop the column entirely
+   and offer a slim floating handle to bring it back. */
+.main-columns.two-col.preview-collapsed {
+  grid-template-columns: 1fr;
+}
+
+.main-columns.preview-collapsed .col-preview {
+  display: none;
+}
+
+.preview-show-handle {
+  position: fixed;
+  right: 0;
+  top: 45%;
+  transform: translateY(-50%);
+  display: none;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.55rem 0.7rem 0.55rem 0.6rem;
+  border: 1px solid var(--border);
+  border-right: none;
+  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-dim);
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: var(--shadow);
+  transition: color 0.15s, border-color 0.15s, background 0.15s, padding 0.15s;
+  z-index: 60;
+}
+
+.preview-show-handle.visible {
+  display: inline-flex;
+}
+
+.preview-show-handle:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-bg);
+  padding-left: 0.85rem;
+}
+
+.preview-show-handle svg {
+  flex-shrink: 0;
+}
+
+@media (max-width: 640px) {
+  .preview-show-handle {
+    top: auto;
+    bottom: 5.5rem;
+    transform: none;
+    padding: 0.5rem 0.65rem;
+  }
+  .preview-show-handle:hover {
+    padding-left: 0.65rem;
+  }
 }
 
 .btn-copy {

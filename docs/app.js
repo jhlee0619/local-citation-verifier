@@ -198,6 +198,7 @@
   const colPreview = $("#col-preview");
   const previewPanelEl = $("#preview-panel");
   const btnPreviewToggle = $("#btn-preview-toggle");
+  const previewShowHandle = $("#preview-show-handle");
   const previewCode = $("#preview-code");
   const previewPlaceholder = $(".preview-placeholder");
 
@@ -205,15 +206,25 @@
     if (!previewPanelEl || !btnPreviewToggle) return;
     const collapsed = sessionStorage.getItem("bv-preview-collapsed") === "1";
     previewPanelEl.classList.toggle("is-collapsed", collapsed);
+    mainColumns?.classList.toggle("preview-collapsed", collapsed);
     btnPreviewToggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
     btnPreviewToggle.title = collapsed ? "Expand Live BibTeX preview" : "Collapse Live BibTeX preview";
     const lbl = btnPreviewToggle.querySelector(".btn-preview-toggle-text");
     if (lbl) lbl.textContent = collapsed ? "Show" : "Hide";
+    if (previewShowHandle) {
+      const hasResults = colPreview?.classList.contains("visible");
+      previewShowHandle.classList.toggle("visible", collapsed && !!hasResults);
+      previewShowHandle.setAttribute("aria-expanded", collapsed ? "false" : "true");
+    }
   }
 
   btnPreviewToggle?.addEventListener("click", () => {
     const willCollapse = !previewPanelEl.classList.contains("is-collapsed");
     sessionStorage.setItem("bv-preview-collapsed", willCollapse ? "1" : "0");
+    syncPreviewPanelCollapsed();
+  });
+  previewShowHandle?.addEventListener("click", () => {
+    sessionStorage.setItem("bv-preview-collapsed", "0");
     syncPreviewPanelCollapsed();
   });
   syncPreviewPanelCollapsed();
@@ -302,6 +313,7 @@
     previewPlaceholder.style.display = "flex";
     previewCode.style.display = "none";
     previewCode.textContent = "";
+    syncPreviewPanelCollapsed();
 
     parsedEntries = B.parseBib(content);
 
