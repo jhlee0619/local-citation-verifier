@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Local Citation Verifier — Catch Errors &amp; Hallucinated References in Your Bibliography</title>
-  <meta name="description" content="Free browser tool to verify BibTeX entries against CrossRef and Semantic Scholar, with optional local WebGPU reranking for ambiguous paper matches. Detects hallucinated references from AI, wrong authors, incorrect years, missing DOIs, and duplicate entries." />
+  <title>Local Citation Verifier — BibTeX QA with Local WebGPU Reranking</title>
+  <meta name="description" content="A browser-based citation quality desk for checking BibTeX against CrossRef and Semantic Scholar, with Gemma WebGPU reranking for ambiguous preprint and publication matches." />
   <meta name="keywords" content="BibTeX, bibliography checker, verify references, hallucinated citations, LaTeX, CrossRef, Semantic Scholar, DOI, citation checker, academic references, .bib file, Overleaf, BibLaTeX, reference manager, paper verification" />
   <meta name="author" content="Local Citation Verifier contributors" />
   <meta name="robots" content="index, follow" />
@@ -43,8 +43,26 @@
   <div class="page-wrap">
 
     <header class="hero">
-      <div class="hero-top">
-        <h1>Local Citation Verifier</h1>
+      <div class="hero-grid">
+        <div class="hero-copy">
+          <p class="hero-kicker">Citation QA desk / WebGPU rerank</p>
+          <h1>Local Citation Verifier</h1>
+          <p class="hero-tagline">Audit a BibTeX file against real publication records, then resolve metadata diffs without leaving the browser.</p>
+          <div class="hero-signals" aria-label="Primary checks">
+            <span><strong>CrossRef</strong> metadata</span>
+            <span><strong>Semantic Scholar</strong> matching</span>
+            <span><strong>Gemma</strong> local rerank</span>
+          </div>
+        </div>
+        <div class="hero-visual" aria-hidden="true">
+          <div class="signal-board">
+            <div class="signal-row signal-good"><span>doi</span><strong>10.1145/...</strong></div>
+            <div class="signal-row signal-warn"><span>venue</span><strong>preprint vs journal</strong></div>
+            <div class="signal-row signal-hot"><span>title</span><strong>weak index match</strong></div>
+            <div class="signal-rule"></div>
+            <div class="signal-foot">local GPU rerank enabled</div>
+          </div>
+        </div>
         <div class="hero-top-right">
           <a class="github-star-btn" href="https://github.com/jhlee0619/local-citation-verifier" target="_blank" rel="noopener">
             <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.65 7.65 0 0 1 4 0c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
@@ -55,7 +73,7 @@
             <svg class="icon-moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg>
           </button>
           <button type="button" class="btn-tour" id="btn-start-tour" title="Quick tour: sample bibliography &amp; how it works">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
             Tour
           </button>
         </div>
@@ -65,7 +83,6 @@
         <svg class="hero-overview-chevron" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
       </button>
       <div class="hero-overview" id="hero-overview">
-        <p class="hero-tagline">Catch errors, hallucinated references, and missing metadata before you submit.</p>
         <p class="hero-lead">Upload a <code>.bib</code> file or paste directly from Overleaf.
           Local Citation Verifier checks every entry against
           <a href="https://www.crossref.org/" target="_blank">CrossRef</a> and
@@ -76,6 +93,15 @@
       </div>
     </header>
 
+    <section class="workspace-shell" aria-label="BibTeX input">
+      <div class="workspace-header">
+        <div>
+          <p class="section-kicker">Input</p>
+          <h2>Start with a bibliography</h2>
+        </div>
+        <p>Drop a file or paste raw BibTeX. Verification begins locally, then title lookups are sent to public academic indexes.</p>
+      </div>
+
     <div class="input-tabs">
       <button class="input-tab active" data-tab="upload">Upload file</button>
       <button class="input-tab" data-tab="paste">Paste BibTeX</button>
@@ -83,7 +109,13 @@
 
     <div class="tab-panel active" id="tab-upload">
       <div class="upload-zone">
-        <span class="icon">&#128462;</span>
+        <span class="icon upload-mark">
+          <svg width="32" height="32" viewBox="0 0 32 32" fill="none" aria-hidden="true">
+            <path d="M8 6h10l6 6v14H8V6z" stroke="currentColor" stroke-width="1.7"/>
+            <path d="M18 6v6h6" stroke="currentColor" stroke-width="1.7"/>
+            <path d="M12 19h8M12 23h6" stroke="currentColor" stroke-width="1.7"/>
+          </svg>
+        </span>
         <span class="label">Drop your .bib file here or click to browse</span>
         <p>Standard BibTeX &amp; BibLaTeX &middot; Processed entirely in your browser</p>
         <input type="file" id="file-input" accept=".bib" />
@@ -94,6 +126,7 @@
       <textarea id="bib-paste" class="bib-textarea" placeholder="Paste your BibTeX content here, e.g. from Overleaf...&#10;&#10;@article{example2024,&#10;  title={Your Paper Title},&#10;  author={Author, First and Author, Second},&#10;  year={2024},&#10;  journal={Some Journal}&#10;}"></textarea>
       <button class="btn-verify-paste" id="btn-verify-paste">Verify pasted BibTeX</button>
     </div>
+    </section>
 
     <div class="results-section">
       <div class="summary-bar">
@@ -204,32 +237,32 @@
       <h2>Features</h2>
       <div class="feature-grid">
         <div class="feature-card">
-          <div class="feature-icon">&#129302;</div>
+          <div class="feature-icon">F1</div>
           <h3>Hallucination detection</h3>
           <p>Flags entries whose titles don't match any known publication — catches fabricated references from AI-generated bibliographies.</p>
         </div>
         <div class="feature-card">
-          <div class="feature-icon">&#128269;</div>
+          <div class="feature-icon">F2</div>
           <h3>Dual-source verification</h3>
           <p>Queries both Semantic Scholar and CrossRef to maximize coverage and metadata quality.</p>
         </div>
         <div class="feature-card">
-          <div class="feature-icon">&#128203;</div>
+          <div class="feature-icon">F3</div>
           <h3>Field-by-field diff</h3>
           <p>See exactly which fields differ — authors, year, venue, DOI, pages — with inline editing and a live BibTeX preview.</p>
         </div>
         <div class="feature-card">
-          <div class="feature-icon">&#128274;</div>
+          <div class="feature-icon">F4</div>
           <h3>Privacy-first</h3>
           <p>Your file never leaves the browser. Only paper titles are sent to public academic APIs for lookup. No server, no tracking.</p>
         </div>
         <div class="feature-card">
-          <div class="feature-icon">&#128221;</div>
+          <div class="feature-icon">F5</div>
           <h3>DOI &amp; metadata enrichment</h3>
           <p>Fills in missing DOIs, publisher info, volume, pages, and other metadata from the online record automatically.</p>
         </div>
         <div class="feature-card">
-          <div class="feature-icon">&#127919;</div>
+          <div class="feature-icon">F6</div>
           <h3>Smart matching</h3>
           <p>Fuzzy title matching, LaTeX-aware text processing, and last-name-based author comparison handle real-world formatting differences.</p>
         </div>
