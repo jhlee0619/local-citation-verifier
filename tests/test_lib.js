@@ -658,6 +658,35 @@ test("builds a numbered prompt for candidate reranking", () => {
   assert.ok(prompt.includes("prefer the published version"));
 });
 
+
+test("prompt declares strict rerank schema and fixed risk flags", () => {
+  const prompt = gemma.buildPrompt(
+    { title: "A Study", author: "Doe, Jane", year: "2024", journal: "arXiv" },
+    [
+      { title: "A Study", author: "Doe, Jane", year: "2024", journal: "CoRR" },
+      { title: "A Study", author: "Doe, Jane", year: "2024", journal: "Journal A", doi: "10.1/a" },
+    ],
+    { preferPublished: true },
+  );
+
+  assert.ok(prompt.includes("best must be an integer from 1 to 2"));
+  assert.ok(prompt.includes("If status is not_found"));
+  assert.ok(prompt.includes("Allowed risk_flags"));
+  assert.ok(prompt.includes("venue_conflict"));
+});
+
+test("parseDecision filters risk flags and escalates risky auto updates", () => {
+  const decision = gemma.parseDecision(
+    '{"best":1,"status":"updated","confidence":0.7,"risk_flags":["year mismatch","bogus","venue_conflict","venue_conflict"],"reason":"year moved"}',
+    2,
+    lib.parseRerankChoice,
+  );
+
+  assert.strictEqual(decision.index, 0);
+  assert.strictEqual(decision.status, "needs_review");
+  assert.deepStrictEqual(decision.riskFlags, ["year_mismatch", "venue_conflict"]);
+});
+
 test("removes published-version preference when disabled", () => {
   const prompt = gemma.buildPrompt(
     { title: "A Study" },

@@ -6,6 +6,18 @@
 
   let modelPromise = null;
 
+  const ALLOWED_RISK_FLAGS = [
+    "title_mismatch",
+    "author_mismatch",
+    "year_mismatch",
+    "venue_conflict",
+    "volume_pages_conflict",
+    "generic_title",
+    "uncertain_version",
+    "no_same_paper",
+  ];
+  const ALLOWED_RISK_FLAG_SET = new Set(ALLOWED_RISK_FLAGS);
+
   function canUseWebGPU() {
     return typeof navigator !== "undefined" && !!navigator.gpu;
   }
@@ -26,15 +38,22 @@
     const versionRule = options.preferPublished
       ? "If a preprint and a published journal/conference version are the same paper, prefer the published version."
       : "Do not prefer a published version unless it better matches the BibTeX entry.";
+    const candidateCount = candidates.length;
     return [
       "Choose the single best metadata record for the BibTeX entry and classify whether it is safe to apply automatically.",
-      "Return only JSON like {\"best\": 1, \"status\": \"updated\", \"confidence\": 0.82, \"risk_flags\": [], \"reason\": \"same paper with DOI enrichment\"}.",
+      `Return only strict JSON: {"best": 1, "status": "updated", "confidence": 0.82, "risk_flags": [], "reason": "same paper with DOI enrichment"}.`,
+      `The best must be an integer from 1 to ${candidateCount}; do not return 0, null, or a candidate title.`,
       "Allowed status values: verified, updated, needs_review, not_found.",
+      `Allowed risk_flags: ${ALLOWED_RISK_FLAGS.join(", ")}. Use only these exact snake_case strings.`,
       "Use verified only when the BibTeX entry already matches the selected record and no material change is needed.",
       "Use updated only when the selected record is clearly the same paper and changes are safe enrichments, venue normalizations, DOI additions, or same-paper preprint to published-version upgrades.",
       "Use needs_review when the title is generic or ambiguous, the first author differs, the year differs by more than one, the venue changes to an unrelated journal/conference, or volume/pages contradict.",
-      "Use not_found when no candidate is the same paper.",
+      `If status is not_found, still set best to the closest candidate number, add risk_flags ["no_same_paper"], and explain that no candidate is the same paper.`,
+      "If any risk_flags are present, prefer needs_review unless status is not_found.",
       `Prefer the exact same paper, matching title/authors/year. ${versionRule}`,
+      "Example: same title/authors with CoRR/arXiv and journal candidates -> choose the journal candidate with status updated and empty risk_flags.",
+      "Example: same short title but different first author or unrelated venue -> choose the closest candidate with status needs_review and risk_flags such as author_mismatch or venue_conflict.",
+      "Do not invent metadata, DOI, authors, venues, or candidates. Reason must be 16 words or fewer.",
       "",
       `BibTeX title: ${original.title || ""}`,
       `BibTeX authors: ${original.author || ""}`,
@@ -44,6 +63,24 @@
       "Candidates:",
       ...candidates.map(candidateSummary),
     ].join("\n");
+  }
+
+  function normalizeRiskFlag(value) {
+    const flag = String(value || "").toLowerCase().replace(/[-\s]+/g, "_");
+    return ALLOWED_RISK_FLAG_SET.has(flag) ? flag : null;
+  }
+
+  function normalizedRiskFlags(values) {
+    if (!Array.isArray(values)) return [];
+    const flags = [];
+    const seen = new Set();
+    for (const value of values) {
+      const flag = normalizeRiskFlag(value);
+      if (!flag || seen.has(flag)) continue;
+      seen.add(flag);
+      flags.push(flag);
+    }
+    return flags;
   }
 
   function normalizedStatus(value) {
@@ -77,12 +114,11 @@
     const parsed = parseJsonObject(text);
     const status = normalizedStatus(parsed?.status);
     const confidence = Number(parsed?.confidence);
-    const riskFlags = Array.isArray(parsed?.risk_flags)
-      ? parsed.risk_flags.filter(flag => typeof flag === "string")
-      : [];
+    const riskFlags = normalizedRiskFlags(parsed?.risk_flags);
+    const safeStatus = riskFlags.length && status !== "not_found" ? "needs_review" : status;
     return {
       index,
-      status,
+      status: safeStatus,
       confidence: Number.isFinite(confidence) ? Math.max(0, Math.min(1, confidence)) : null,
       reason: typeof parsed?.reason === "string" ? parsed.reason : "",
       riskFlags,
@@ -116,6 +152,7 @@
   }
 
   exports.GEMMA_MODULE_URL = GEMMA_MODULE_URL;
+  exports.ALLOWED_RISK_FLAGS = ALLOWED_RISK_FLAGS;
   exports.canUseWebGPU = canUseWebGPU;
   exports.buildPrompt = buildPrompt;
   exports.parseDecision = parseDecision;
