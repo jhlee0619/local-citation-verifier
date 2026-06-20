@@ -42,7 +42,7 @@ python3 -m venv .venv-vllm
 . .venv-vllm/bin/activate
 pip install vllm
 
-vllm serve google/gemma-2-2b-it --host 127.0.0.1 --port 8000
+vllm serve google/gemma-4-E2B-it --host 127.0.0.1 --port 8000 --max-model-len 8192
 PORT=8088 VLLM_BASE_URL=http://127.0.0.1:8000 python3 server/vllm_proxy_server.py
 ```
 
