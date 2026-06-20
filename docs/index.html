@@ -48,11 +48,11 @@
         <div class="hero-copy">
           <p class="hero-kicker">Local bibliography control room</p>
           <h1>Local Citation Verifier</h1>
-          <p class="hero-tagline">Move from raw `.bib` to evidence-backed metadata decisions in one browser workspace.</p>
+          <p class="hero-tagline">Upload or paste BibTeX, verify publication metadata, and rerank ambiguous matches on local WebGPU.</p>
           <div class="hero-signals" aria-label="Primary checks">
-            <span><strong>01</strong> Parse locally</span>
-            <span><strong>02</strong> Match records</span>
-            <span><strong>03</strong> Resolve diffs</span>
+            <span><strong>CrossRef</strong> metadata</span>
+            <span><strong>Semantic Scholar</strong> matching</span>
+            <span><strong>Gemma</strong> local rerank</span>
           </div>
         </div>
         <div class="hero-top-right">
@@ -64,51 +64,9 @@
             <svg class="icon-sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
             <svg class="icon-moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg>
           </button>
-          <button type="button" class="btn-tour" id="btn-start-tour" title="Quick tour: sample bibliography &amp; how it works">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
-            Tour
-          </button>
         </div>
-      </div>
-      <button type="button" class="hero-overview-toggle" id="hero-overview-toggle" aria-expanded="false" aria-controls="hero-overview">
-        <span id="hero-overview-toggle-label">About this tool</span>
-        <svg class="hero-overview-chevron" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
-      </button>
-      <div class="hero-overview" id="hero-overview">
-        <p class="hero-lead">Upload a <code>.bib</code> file or paste directly from Overleaf.
-          Local Citation Verifier checks every entry against
-          <a href="https://www.crossref.org/" target="_blank">CrossRef</a> and
-          <a href="https://www.semanticscholar.org/" target="_blank">Semantic Scholar</a> to find
-          wrong authors, incorrect years, mismatched venues, missing DOIs, duplicates,
-          and <strong>AI-hallucinated citations</strong> that don't exist in any database.
-          100% in-browser — your data never leaves your machine.</p>
       </div>
     </header>
-
-    <aside class="intel-panel" aria-label="Verification routing">
-      <div class="intel-panel-head">
-        <p class="section-kicker">Route</p>
-        <h2>Evidence before edits</h2>
-      </div>
-      <div class="route-list">
-        <div class="route-item route-active">
-          <span>CrossRef</span>
-          <strong>publication metadata</strong>
-        </div>
-        <div class="route-item route-active">
-          <span>Semantic Scholar</span>
-          <strong>title and author match</strong>
-        </div>
-        <div class="route-item route-gpu">
-          <span>Gemma WebGPU</span>
-          <strong>local candidate rerank</strong>
-        </div>
-      </div>
-      <div class="privacy-note">
-        <strong>Browser-first by design.</strong>
-        Your bibliography is parsed locally. Only lookup titles and model assets cross the network.
-      </div>
-    </aside>
 
     <section class="workspace-shell import-panel" aria-label="BibTeX input">
       <div class="workspace-header">
@@ -116,7 +74,7 @@
           <p class="section-kicker">Import</p>
           <h2>Load the file under review</h2>
         </div>
-        <p>Start from a `.bib` file or a paste buffer. The review queue appears below as soon as parsing begins.</p>
+        <p>Drop a file or paste raw BibTeX. Results appear below when verification starts.</p>
       </div>
 
     <div class="input-tabs">
@@ -223,90 +181,10 @@
     </div>
     </div>
 
-    <section class="method-board info-section" id="how-it-works">
-      <div class="method-heading">
-        <p class="section-kicker">Verification route</p>
-        <h2>From citation text to reviewable evidence</h2>
-      </div>
-      <div class="method-timeline">
-        <div class="method-step">
-          <span>01</span>
-          <h3>Local parse</h3>
-          <p>The `.bib` is tokenized in the browser, preserving editable fields and internal entry ids.</p>
-        </div>
-        <div class="method-step">
-          <span>02</span>
-          <h3>Index lookup</h3>
-          <p>Titles query Semantic Scholar and CrossRef, then candidates are normalized into one metadata shape.</p>
-        </div>
-        <div class="method-step">
-          <span>03</span>
-          <h3>Candidate arbitration</h3>
-          <p>Duplicate, preprint, and published records are ranked heuristically, then optionally reranked on local WebGPU.</p>
-        </div>
-        <div class="method-step">
-          <span>04</span>
-          <h3>Human decision</h3>
-          <p>Field-level diffs let you accept, revert, remove, or edit before exporting corrected BibTeX.</p>
-        </div>
-      </div>
-    </section>
-
-    <section class="evidence-ledger info-section">
-      <div class="ledger-heading">
-        <p class="section-kicker">Evidence ledger</p>
-        <h2>What the desk watches</h2>
-      </div>
-      <div class="ledger-grid">
-        <article>
-          <span>Mismatch</span>
-          <strong>AI-hallucinated or mistyped titles</strong>
-          <p>Weak or missing matches are surfaced as review work instead of silently rewritten.</p>
-        </article>
-        <article>
-          <span>Versioning</span>
-          <strong>Preprint vs. conference or journal records</strong>
-          <p>Published records can be preferred while still keeping the candidate trail visible.</p>
-        </article>
-        <article>
-          <span>Metadata</span>
-          <strong>DOI, venue, pages, publisher, volume</strong>
-          <p>Missing fields are enriched from indexed records and shown as explicit diffs.</p>
-        </article>
-        <article>
-          <span>Output</span>
-          <strong>Exportable corrected BibTeX</strong>
-          <p>The live preview updates as decisions are made, ready for LaTeX or Overleaf.</p>
-        </article>
-      </div>
-    </section>
-
-    <section class="operating-notes info-section">
-      <div class="note-column">
-        <p class="section-kicker">Privacy model</p>
-        <h2>Local file, public lookups, local rerank.</h2>
-      </div>
-      <div class="note-column">
-        <details open>
-          <summary>What leaves the browser?</summary>
-          <p>Paper titles are sent to CrossRef and Semantic Scholar for lookup. The full BibTeX file is not uploaded to an app server.</p>
-        </details>
-        <details>
-          <summary>Where does Gemma run?</summary>
-          <p>GitHub Pages serves the static app. Gemma WebGPU assets load in the visitor's browser, and inference runs on that visitor's PC when supported.</p>
-        </details>
-        <details>
-          <summary>What is the source?</summary>
-          <p>This project is based on <a href="https://github.com/merfanian/Bibtex-Verifier" target="_blank" rel="noopener">BibTeX Verifier</a> by merfanian, licensed under MIT.</p>
-        </details>
-      </div>
-    </section>
-
     <footer class="site-footer info-section">
       <p>Open source under <a href="https://github.com/jhlee0619/local-citation-verifier/blob/main/LICENSE" target="_blank" rel="noopener">MIT License</a>
         &middot; <a href="https://github.com/jhlee0619/local-citation-verifier" target="_blank" rel="noopener">GitHub</a>
-        &middot; Based on <a href="https://github.com/merfanian/Bibtex-Verifier" target="_blank" rel="noopener">BibTeX Verifier</a>
-        &middot; <button type="button" class="footer-tour-link" id="footer-start-tour">Quick tour</button></p>
+        &middot; Based on <a href="https://github.com/merfanian/Bibtex-Verifier" target="_blank" rel="noopener">BibTeX Verifier</a></p>
     </footer>
 
   </div>
