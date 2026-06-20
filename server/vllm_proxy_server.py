@@ -144,7 +144,7 @@ def make_chat_payload(model: str, rerank: RerankRequest) -> JsonObject:
         "model": model,
         "messages": [{"role": "user", "content": rerank.prompt}],
         "temperature": 0,
-        "max_tokens": 24,
+        "max_tokens": 160,
     }
 
 

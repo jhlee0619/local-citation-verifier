@@ -36,7 +36,7 @@ def test_make_chat_payload_uses_openai_chat_shape() -> None:
     payload = make_chat_payload("local-model", RerankRequest(prompt="Pick one", candidate_count=3))
     assert payload["model"] == "local-model"
     assert payload["messages"] == [{"role": "user", "content": "Pick one"}]
-    assert payload["max_tokens"] == 24
+    assert payload["max_tokens"] == 160
 
 
 def test_extract_chat_output_reads_first_choice_message() -> None:

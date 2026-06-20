@@ -548,6 +548,48 @@ test("rejects out-of-range rerank model choices", () => {
   assert.strictEqual(lib.parseRerankChoice("no clear answer", 3), null);
 });
 
+test("lets rerank classification escalate unsafe matches to review", () => {
+  assert.strictEqual(lib.resolveRerankStatus("updated", "needs_review"), "needs_review");
+  assert.strictEqual(lib.resolveRerankStatus("updated", "not_found"), "needs_review");
+  assert.strictEqual(lib.resolveRerankStatus("needs_review", "verified"), "needs_review");
+  assert.strictEqual(lib.resolveRerankStatus("updated", "verified"), "updated");
+  assert.strictEqual(lib.resolveRerankStatus("verified", "updated"), "verified");
+});
+
+test("flags generic-title venue changes as critical rerank conflicts", () => {
+  const original = {
+    title: "Management of acute ischemic stroke.",
+    author: "R. Rigual and B. Fuentes and E. Díez-Tejedor",
+    journal: "Bmj",
+    volume: "368",
+    year: "2023",
+  };
+  const found = {
+    title: "Management of acute ischemic stroke.",
+    author: "Rigual, R. and Fuentes, B. and Díez-Tejedor, E.",
+    journal: "Medicina clínica (Ed. impresa)",
+    year: "2023",
+    doi: "10.1016/j.medcli.2023.06.022",
+  };
+
+  assert.strictEqual(lib.hasCriticalMetadataConflict(original, found), true);
+});
+
+test("allows safe DOI enrichment for same venue and metadata", () => {
+  const original = {
+    title: "Masked Autoencoders Are Scalable Vision Learners",
+    author: "He, Kaiming and Chen, Xinlei",
+    booktitle: "Computer Vision and Pattern Recognition",
+    year: "2022",
+  };
+  const found = {
+    ...original,
+    doi: "10.1109/CVPR52688.2022.01553",
+  };
+
+  assert.strictEqual(lib.hasCriticalMetadataConflict(original, found), false);
+});
+
 // ═══════════════════════════════════════════════════════════════════════
 console.log("\n── Gemma reranker prompt ──");
 
@@ -561,7 +603,7 @@ test("builds a numbered prompt for candidate reranking", () => {
     { preferPublished: true },
   );
 
-  assert.ok(prompt.includes('Return only JSON like {"best": 1}.'));
+  assert.ok(prompt.includes('"status"'));
   assert.ok(prompt.includes("1. title="));
   assert.ok(prompt.includes("2. title="));
   assert.ok(prompt.includes("prefer the published version"));

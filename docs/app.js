@@ -159,6 +159,17 @@
     return merged;
   }
 
+  function attachRerankDecision(candidate, aiChoice) {
+    if (!aiChoice?.status) return candidate;
+    return {
+      ...candidate,
+      _rerankStatus: aiChoice.status,
+      _rerankConfidence: aiChoice.confidence,
+      _rerankReason: aiChoice.reason || "",
+      _rerankRiskFlags: aiChoice.riskFlags || [],
+    };
+  }
+
   async function lookupPaperWithRerank(title, original) {
     const candidates = await searchCandidatePool(title);
     const preferPublished = optPreferPublished?.checked !== false;
@@ -166,12 +177,13 @@
     if (!ranked.best) return null;
 
     let selected = ranked.best;
+    let aiChoice = null;
     const provider = getRerankProvider();
     if (candidates.length > 1 && provider !== "off") {
       try {
         const reranker = provider === "vllm" ? window.BibVllmReranker : window.BibGemmaReranker;
         if (!reranker) throw new Error(`${provider} reranker is unavailable.`);
-        const aiChoice = await reranker.rerank({
+        aiChoice = await reranker.rerank({
           original,
           candidates,
           parseChoice: B.parseRerankChoice,
@@ -186,7 +198,7 @@
       }
     }
 
-    return mergeSamePaperMetadata(selected, candidates);
+    return attachRerankDecision(mergeSamePaperMetadata(selected, candidates), aiChoice);
   }
 
   async function lookupPaper(title, original) {
@@ -442,10 +454,13 @@
         renderEntryCard(r);
       } else {
         const cmp = B.compareEntry(entry, found);
+        let finalStatus = B.resolveRerankStatus(cmp.status, found._rerankStatus);
+        if (finalStatus !== "not_found" && B.hasCriticalMetadataConflict(entry, found))
+          finalStatus = "needs_review";
         let fieldDiffs = cmp.field_diffs;
-        if (cmp.status === "needs_review" && found)
+        if (finalStatus === "needs_review" && found && !fieldDiffs.length)
           fieldDiffs = B.fieldDiffsForNeedsReview(entry, found);
-        const r = buildResult(entry, i, cmp.status, cmp.title_score, fieldDiffs, cmp.suggested, found);
+        const r = buildResult(entry, i, finalStatus, cmp.title_score, fieldDiffs, cmp.suggested, found);
         results.push(r);
         renderEntryCard(r);
       }
@@ -482,6 +497,9 @@
       field_diffs: fieldDiffs,
       suggested,
       found_title: found ? (found.title || "") : "",
+      ai_status: found ? (found._rerankStatus || "") : "",
+      ai_reason: found ? (found._rerankReason || "") : "",
+      ai_risk_flags: found ? (found._rerankRiskFlags || []) : [],
       duplicate_of: entry._duplicateOf || null,
     };
   }
@@ -660,10 +678,13 @@
 
     let reviewHintHTML = "";
     if (r.status === "needs_review" && r.found_title) {
+      const aiReason = r.ai_reason
+        ? ` Local LLM reason: ${esc(r.ai_reason)}`
+        : "";
       reviewHintHTML = `<div class="review-hint">The closest database record may not be the paper you meant
         (<strong>${esc(String(r.title_score))}%</strong> title similarity to
         <strong class="review-hint-match">${esc(r.found_title)}</strong>).
-        Review the suggestions below and use the checkmark on each row to adopt a value, or keep your original text.</div>`;
+        Review the suggestions below and use the checkmark on each row to adopt a value, or keep your original text.${aiReason}</div>`;
     }
 
     let notFoundHintHTML = "";

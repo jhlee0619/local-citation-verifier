@@ -23,9 +23,20 @@
 
     const data = await response.json();
     const output = String(data.output || "");
-    const index = parseChoice(output, candidates.length);
+    const decision = root.BibGemmaReranker.parseDecision
+      ? root.BibGemmaReranker.parseDecision(output, candidates.length, parseChoice)
+      : null;
+    const index = decision ? decision.index : parseChoice(output, candidates.length);
     if (index === null) return null;
-    return { index, candidate: candidates[index], output };
+    return {
+      index,
+      candidate: candidates[index],
+      output,
+      status: decision?.status || null,
+      confidence: decision?.confidence ?? null,
+      reason: decision?.reason || "",
+      riskFlags: decision?.riskFlags || [],
+    };
   }
 
   async function health(endpoint) {

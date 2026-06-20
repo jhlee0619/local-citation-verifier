@@ -518,6 +518,49 @@
     return Number.isInteger(n) && n >= 1 && n <= candidateCount ? n - 1 : null;
   }
 
+  function resolveRerankStatus(compareStatus, aiStatus) {
+    const status = String(aiStatus || "").toLowerCase().replace(/[-\s]+/g, "_");
+    if (!status) return compareStatus;
+    if (status === "needs_review" || status === "not_found") return "needs_review";
+    if (compareStatus === "needs_review") return "needs_review";
+    if (status === "updated" || status === "auto_updated")
+      return compareStatus === "verified" ? "verified" : "updated";
+    if (status === "verified") return compareStatus;
+    return compareStatus;
+  }
+
+  function hasCriticalMetadataConflict(original, found) {
+    if (!found) return false;
+    const titleTokenCount = normalizeTitle(original.title || "").split(/\s+/).filter(Boolean).length;
+    const hasGenericTitle = titleTokenCount > 0 && titleTokenCount <= 6;
+
+    const originalYear = Number(original.year);
+    const foundYear = Number(found.year);
+    if (Number.isInteger(originalYear) && Number.isInteger(foundYear) && Math.abs(originalYear - foundYear) > 1)
+      return true;
+
+    if ((original.author || "").trim() && (found.author || "").trim() && compareAuthors(original.author, found.author) < 50)
+      return true;
+
+    const originalVenue = original.journal || original.booktitle || "";
+    const foundVenue = found.journal || found.booktitle || "";
+    const venueConflict = originalVenue.trim() && foundVenue.trim() &&
+      !isPreprintVenue(originalVenue) && !isPreprintVenue(foundVenue) &&
+      compareField("journal", originalVenue, foundVenue) < 65;
+
+    const pageConflict = (original.pages || "").trim() && (found.pages || "").trim() &&
+      compareField("pages", original.pages, found.pages) < 100;
+    const volumeConflict = (original.volume || "").trim() && (found.volume || "").trim() &&
+      compareField("volume", original.volume, found.volume) < 100;
+    const issueConflict = (original.number || "").trim() && (found.number || "").trim() &&
+      compareField("number", original.number, found.number) < 100;
+
+    if (venueConflict && hasGenericTitle) return true;
+    if (pageConflict && (volumeConflict || issueConflict)) return true;
+    if (venueConflict && (pageConflict || volumeConflict || issueConflict)) return true;
+    return false;
+  }
+
   function bestMatch(candidates, queryTitle) {
     let best = null, bestScore = 0;
     for (const c of candidates) {
@@ -635,6 +678,8 @@
   exports.candidateScore = candidateScore;
   exports.rerankCandidates = rerankCandidates;
   exports.parseRerankChoice = parseRerankChoice;
+  exports.resolveRerankStatus = resolveRerankStatus;
+  exports.hasCriticalMetadataConflict = hasCriticalMetadataConflict;
   exports.bestMatch = bestMatch;
   exports.abbreviateVenue = abbreviateVenue;
   exports.expandVenue = expandVenue;
