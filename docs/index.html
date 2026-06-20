@@ -3,37 +3,35 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="google-site-verification" content="Ec53uaP67xWogWFEI0Asj4FyQZ3RjAtHp6CcQckrWOI" />
-
-  <title>BibTeX Verifier — Catch Errors &amp; Hallucinated References in Your Bibliography</title>
-  <meta name="description" content="Free online tool to verify BibTeX entries against CrossRef and Semantic Scholar. Detects hallucinated references from AI, wrong authors, incorrect years, missing DOIs, and duplicate entries. Works in the browser — no install needed." />
+  <title>Local Citation Verifier — Catch Errors &amp; Hallucinated References in Your Bibliography</title>
+  <meta name="description" content="Free browser tool to verify BibTeX entries against CrossRef and Semantic Scholar, with optional local WebGPU reranking for ambiguous paper matches. Detects hallucinated references from AI, wrong authors, incorrect years, missing DOIs, and duplicate entries." />
   <meta name="keywords" content="BibTeX, bibliography checker, verify references, hallucinated citations, LaTeX, CrossRef, Semantic Scholar, DOI, citation checker, academic references, .bib file, Overleaf, BibLaTeX, reference manager, paper verification" />
-  <meta name="author" content="merfanian" />
+  <meta name="author" content="Local Citation Verifier contributors" />
   <meta name="robots" content="index, follow" />
-  <link rel="canonical" href="https://merfanian.github.io/Bibtex-Verifier/" />
+  <link rel="canonical" href="https://jhlee0619.github.io/local-citation-verifier/" />
 
   <meta property="og:type" content="website" />
-  <meta property="og:url" content="https://merfanian.github.io/Bibtex-Verifier/" />
-  <meta property="og:title" content="BibTeX Verifier — Catch Errors & Hallucinated References" />
-  <meta property="og:description" content="Free browser-based tool to verify your .bib file against CrossRef and Semantic Scholar. Finds wrong authors, incorrect years, fabricated citations, and missing DOIs." />
-  <meta property="og:site_name" content="BibTeX Verifier" />
+  <meta property="og:url" content="https://jhlee0619.github.io/local-citation-verifier/" />
+  <meta property="og:title" content="Local Citation Verifier — Catch Errors & Hallucinated References" />
+  <meta property="og:description" content="Free browser-based tool to verify your .bib file against CrossRef and Semantic Scholar, with optional local WebGPU reranking for ambiguous paper matches." />
+  <meta property="og:site_name" content="Local Citation Verifier" />
 
   <meta name="twitter:card" content="summary_large_image" />
-  <meta name="twitter:title" content="BibTeX Verifier — Catch Errors & Hallucinated References" />
-  <meta name="twitter:description" content="Verify BibTeX entries against academic databases. Detects AI-hallucinated citations, wrong metadata, and missing DOIs. Free, private, no install." />
+  <meta name="twitter:title" content="Local Citation Verifier — Catch Errors & Hallucinated References" />
+  <meta name="twitter:description" content="Verify BibTeX entries against academic databases. Detects AI-hallucinated citations, wrong metadata, and missing DOIs. Optional local GPU reranking, free, private, no install." />
 
   <script type="application/ld+json">
   {
     "@context": "https://schema.org",
     "@type": "WebApplication",
-    "name": "BibTeX Verifier",
-    "url": "https://merfanian.github.io/Bibtex-Verifier/",
-    "description": "Free online tool to verify BibTeX bibliography entries against CrossRef and Semantic Scholar. Catches hallucinated references, wrong authors, incorrect years, and missing DOIs.",
+    "name": "Local Citation Verifier",
+    "url": "https://jhlee0619.github.io/local-citation-verifier/",
+    "description": "Free online tool to verify BibTeX bibliography entries against CrossRef and Semantic Scholar. Catches hallucinated references, wrong authors, incorrect years, missing DOIs, and reranks ambiguous matches locally with WebGPU.",
     "applicationCategory": "UtilitiesApplication",
     "operatingSystem": "Any",
     "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
     "browserRequirements": "Requires a modern web browser with JavaScript enabled",
-    "featureList": ["BibTeX verification", "Hallucinated reference detection", "DOI enrichment", "Duplicate detection", "Field-by-field diff", "Dark/light theme"],
+    "featureList": ["BibTeX verification", "Hallucinated reference detection", "Local WebGPU reranking", "DOI enrichment", "Duplicate detection", "Field-by-field diff", "Dark/light theme"],
     "isAccessibleForFree": true,
     "license": "https://opensource.org/licenses/MIT"
   }
@@ -46,11 +44,11 @@
 
     <header class="hero">
       <div class="hero-top">
-        <h1>BibTeX Verifier</h1>
+        <h1>Local Citation Verifier</h1>
         <div class="hero-top-right">
-          <a class="github-star-btn" href="https://github.com/merfanian/Bibtex-Verifier" target="_blank" rel="noopener">
+          <a class="github-star-btn" href="https://github.com/jhlee0619/local-citation-verifier" target="_blank" rel="noopener">
             <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.65 7.65 0 0 1 4 0c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
-            Star on GitHub
+            GitHub
           </a>
           <button class="theme-toggle" id="theme-toggle" title="Toggle light/dark theme">
             <svg class="icon-sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
@@ -69,7 +67,7 @@
       <div class="hero-overview" id="hero-overview">
         <p class="hero-tagline">Catch errors, hallucinated references, and missing metadata before you submit.</p>
         <p class="hero-lead">Upload a <code>.bib</code> file or paste directly from Overleaf.
-          BibTeX Verifier checks every entry against
+          Local Citation Verifier checks every entry against
           <a href="https://www.crossref.org/" target="_blank">CrossRef</a> and
           <a href="https://www.semanticscholar.org/" target="_blank">Semantic Scholar</a> to find
           wrong authors, incorrect years, mismatched venues, missing DOIs, duplicates,
@@ -262,13 +260,14 @@
       </details>
       <details>
         <summary>Is this open source?</summary>
-        <p>Yes! The full source code is on <a href="https://github.com/merfanian/Bibtex-Verifier" target="_blank">GitHub</a> under the MIT license. Contributions are welcome.</p>
+        <p>Yes. This project is based on <a href="https://github.com/merfanian/Bibtex-Verifier" target="_blank" rel="noopener">BibTeX Verifier</a> by merfanian, licensed under MIT. This fork adds local WebGPU reranking for ambiguous paper matches.</p>
       </details>
     </section>
 
     <footer class="site-footer info-section">
-      <p>Open source under <a href="https://github.com/merfanian/Bibtex-Verifier/blob/main/LICENSE" target="_blank">MIT License</a>
-        &middot; <a href="https://github.com/merfanian/Bibtex-Verifier" target="_blank">GitHub</a>
+      <p>Open source under <a href="https://github.com/jhlee0619/local-citation-verifier/blob/main/LICENSE" target="_blank" rel="noopener">MIT License</a>
+        &middot; <a href="https://github.com/jhlee0619/local-citation-verifier" target="_blank" rel="noopener">GitHub</a>
+        &middot; Based on <a href="https://github.com/merfanian/Bibtex-Verifier" target="_blank" rel="noopener">BibTeX Verifier</a>
         &middot; <button type="button" class="footer-tour-link" id="footer-start-tour">Quick tour</button></p>
     </footer>
 
@@ -329,6 +328,14 @@
               <span>Prefer peer-reviewed over arXiv</span>
             </label>
           </div>
+          <div class="settings-row">
+            <svg class="setting-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4"/><path d="M12 18v4"/><path d="M4.93 4.93l2.83 2.83"/><path d="M16.24 16.24l2.83 2.83"/><path d="M2 12h4"/><path d="M18 12h4"/><path d="M4.93 19.07l2.83-2.83"/><path d="M16.24 7.76l2.83-2.83"/><circle cx="12" cy="12" r="3"/></svg>
+            <label class="option-toggle">
+              <input type="checkbox" id="opt-local-gpu-rerank" />
+              <span>Local GPU rerank</span>
+            </label>
+          </div>
+          <div class="sub-option visible gpu-rerank-note" id="gpu-rerank-status">Off · uses Gemma 4 WebGPU when enabled</div>
         </div>
       </div>
 
@@ -345,6 +352,7 @@
 
   <script src="https://unpkg.com/fuzzball@2.2.3/dist/fuzzball.umd.min.js"></script>
   <script src="lib.js"></script>
+  <script src="gemma-reranker.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

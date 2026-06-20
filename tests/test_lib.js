@@ -1,5 +1,6 @@
 const assert = require("assert");
 const lib = require("../docs/lib.js");
+const gemma = require("../docs/gemma-reranker.js");
 
 let passed = 0;
 let failed = 0;
@@ -486,6 +487,94 @@ test("returns null when no candidate meets threshold", () => {
 
 test("returns null for empty candidates", () => {
   assert.strictEqual(lib.bestMatch([], "test"), null);
+});
+
+// ═══════════════════════════════════════════════════════════════════════
+console.log("\n── rerankCandidates ──");
+
+test("prefers a published version over an arXiv/preprint candidate when title and authors match", () => {
+  const original = {
+    title: "Attention Is All You Need",
+    author: "Vaswani, Ashish and Shazeer, Noam",
+    year: "2017",
+  };
+  const candidates = [
+    {
+      title: "Attention Is All You Need",
+      author: "Ashish Vaswani and Noam Shazeer",
+      year: "2017",
+      journal: "CoRR",
+      _source: "semantic_scholar",
+    },
+    {
+      title: "Attention Is All You Need",
+      author: "Vaswani, Ashish and Shazeer, Noam",
+      year: "2017",
+      journal: "Advances in Neural Information Processing Systems",
+      doi: "10.5555/3295222.3295349",
+      _source: "crossref",
+    },
+  ];
+
+  const result = lib.rerankCandidates(candidates, original, { preferPublished: true });
+
+  assert.strictEqual(result.best.journal, "Advances in Neural Information Processing Systems");
+  assert.strictEqual(result.bestIndex, 1);
+});
+
+test("deduplicates candidates by DOI and same normalized title plus venue", () => {
+  const candidates = [
+    { title: "A Study", doi: "10.1000/XYZ", journal: "Journal A" },
+    { title: "A Study", doi: "10.1000/xyz", journal: "Journal B" },
+    { title: "{A} Study", journal: "Journal C" },
+    { title: "A Study", journal: "Journal C" },
+  ];
+
+  const unique = lib.dedupeCandidates(candidates);
+
+  assert.strictEqual(unique.length, 2);
+  assert.strictEqual(unique[0].journal, "Journal A");
+  assert.strictEqual(unique[1].journal, "Journal C");
+});
+
+test("parses a one-based rerank index from model text", () => {
+  assert.strictEqual(lib.parseRerankChoice("2", 3), 1);
+  assert.strictEqual(lib.parseRerankChoice("{\"best\": 3}", 3), 2);
+  assert.strictEqual(lib.parseRerankChoice("candidate 1 is best", 3), 0);
+});
+
+test("rejects out-of-range rerank model choices", () => {
+  assert.strictEqual(lib.parseRerankChoice("4", 3), null);
+  assert.strictEqual(lib.parseRerankChoice("no clear answer", 3), null);
+});
+
+// ═══════════════════════════════════════════════════════════════════════
+console.log("\n── Gemma reranker prompt ──");
+
+test("builds a numbered prompt for candidate reranking", () => {
+  const prompt = gemma.buildPrompt(
+    { title: "A Study", author: "Doe, Jane", year: "2024", journal: "arXiv" },
+    [
+      { title: "A Study", author: "Doe, Jane", year: "2024", journal: "CoRR" },
+      { title: "A Study", author: "Doe, Jane", year: "2024", journal: "Journal A", doi: "10.1/a" },
+    ],
+    { preferPublished: true },
+  );
+
+  assert.ok(prompt.includes('Return only JSON like {"best": 1}.'));
+  assert.ok(prompt.includes("1. title="));
+  assert.ok(prompt.includes("2. title="));
+  assert.ok(prompt.includes("prefer the published version"));
+});
+
+test("removes published-version preference when disabled", () => {
+  const prompt = gemma.buildPrompt(
+    { title: "A Study" },
+    [{ title: "A Study", journal: "Journal A" }, { title: "A Study", journal: "CoRR" }],
+    { preferPublished: false },
+  );
+
+  assert.ok(prompt.includes("Do not prefer a published version"));
 });
 
 // ═══════════════════════════════════════════════════════════════════════

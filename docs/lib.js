@@ -1,5 +1,5 @@
 /*
- * BibLib — pure logic functions for BibTeX Verifier.
+ * BibLib — pure logic functions for Local Citation Verifier.
  * Works as a browser global (window.BibLib) and as a Node.js module.
  */
 (function (exports) {
@@ -431,6 +431,93 @@
     return merged;
   }
 
+  function isPreprintVenue(venue) {
+    const v = normalizeText(venue);
+    return v.includes("arxiv") || v.includes("preprint") || v.includes("corr");
+  }
+
+  function candidateKeys(candidate) {
+    const keys = [];
+    const doi = normalizeText(candidate.doi || "");
+    const title = normalizeTitle(candidate.title || "");
+    const venue = normalizeText(candidate.journal || candidate.booktitle || "");
+    if (doi) keys.push(`doi:${doi}`);
+    if (title && venue) keys.push(`title:${title}|venue:${venue}`);
+    return keys;
+  }
+
+  function dedupeCandidates(candidates) {
+    const seen = new Set();
+    const unique = [];
+    for (const candidate of candidates) {
+      if (!candidate) continue;
+      const keys = candidateKeys(candidate);
+      if (keys.some(key => seen.has(key))) continue;
+      keys.forEach(key => seen.add(key));
+      unique.push(candidate);
+    }
+    return unique;
+  }
+
+  function candidateScore(candidate, original, options = {}) {
+    const titleScore = titleSimilarity(original.title || "", candidate.title || "");
+    if (titleScore < MIN_TITLE_SIM) return -Infinity;
+
+    let score = titleScore;
+    const authorScore = compareAuthors(original.author || "", candidate.author || "");
+    if ((original.author || "").trim() && (candidate.author || "").trim())
+      score += authorScore * 0.25;
+
+    if (original.year && candidate.year)
+      score += original.year === candidate.year ? 8 : -12;
+    if (candidate.doi) score += 4;
+    if (candidate.pages) score += 2;
+    if (candidate.volume) score += 2;
+
+    const venue = candidate.journal || candidate.booktitle || "";
+    if (options.preferPublished && venue)
+      score += isPreprintVenue(venue) ? -10 : 10;
+
+    return score;
+  }
+
+  function rerankCandidates(candidates, original, options = {}) {
+    const unique = dedupeCandidates(candidates);
+    let best = null;
+    let bestIndex = -1;
+    let bestScore = -Infinity;
+    unique.forEach((candidate, index) => {
+      const score = candidateScore(candidate, original, options);
+      if (score > bestScore) {
+        best = candidate;
+        bestIndex = index;
+        bestScore = score;
+      }
+    });
+    return {
+      best: bestScore === -Infinity ? null : best,
+      bestIndex: bestScore === -Infinity ? -1 : bestIndex,
+      candidates: unique,
+      score: bestScore,
+    };
+  }
+
+  function parseRerankChoice(text, candidateCount) {
+    if (!text || candidateCount < 1) return null;
+    const trimmed = String(text).trim();
+    try {
+      const parsed = JSON.parse(trimmed);
+      const raw = parsed.best ?? parsed.choice ?? parsed.index ?? parsed.candidate;
+      const n = Number(raw);
+      if (Number.isInteger(n) && n >= 1 && n <= candidateCount) return n - 1;
+    } catch (_) {}
+
+    const match = /\b(?:candidate\s*)?([1-9]\d*)\b/i.exec(trimmed);
+    if (!match) return null;
+    const n = Number(match[1]);
+    return Number.isInteger(n) && n >= 1 && n <= candidateCount ? n - 1 : null;
+  }
+
   function bestMatch(candidates, queryTitle) {
     let best = null, bestScore = 0;
     for (const c of candidates) {
@@ -543,6 +630,11 @@
   exports.extractLastNames = extractLastNames;
   exports.isSamePaper = isSamePaper;
   exports.mergeMetadata = mergeMetadata;
+  exports.isPreprintVenue = isPreprintVenue;
+  exports.dedupeCandidates = dedupeCandidates;
+  exports.candidateScore = candidateScore;
+  exports.rerankCandidates = rerankCandidates;
+  exports.parseRerankChoice = parseRerankChoice;
   exports.bestMatch = bestMatch;
   exports.abbreviateVenue = abbreviateVenue;
   exports.expandVenue = expandVenue;

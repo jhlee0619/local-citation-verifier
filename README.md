@@ -1,18 +1,19 @@
 <div align="center">
 
-# BibTeX Verifier
+# Local Citation Verifier
 
 **Stop fixing citations by hand.** Paste or upload your `.bib`, compare every entry against real publications, and leave with a bibliography you trust — including catching **AI-hallucinated** references before they ship.
 
-[![Live app](https://img.shields.io/badge/Try_it_live-merfanian.github.io-5b8def?style=for-the-badge)](https://merfanian.github.io/Bibtex-Verifier/)
+[![Live app](https://img.shields.io/badge/Try_it_live-GitHub_Pages-5b8def?style=for-the-badge)](https://jhlee0619.github.io/local-citation-verifier/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-22c55e?style=flat-square)](LICENSE)
-[![CI](https://github.com/merfanian/Bibtex-Verifier/actions/workflows/ci.yml/badge.svg)](https://github.com/merfanian/Bibtex-Verifier/actions)
+
+Based on [BibTeX Verifier](https://github.com/merfanian/Bibtex-Verifier) by merfanian, licensed under MIT. This fork adds local WebGPU reranking for ambiguous paper matches.
 
 <br/>
 
 ### See it in action
 
-<a href="https://merfanian.github.io/Bibtex-Verifier/" title="Try BibTeX Verifier">
+<a href="https://jhlee0619.github.io/local-citation-verifier/" title="Try Local Citation Verifier">
   <img src="demo/demo.gif" alt="Screen recording: upload or paste a BibTeX file, verify entries against CrossRef and Semantic Scholar, review diffs and live preview, then download the corrected bibliography" width="92%">
 </a>
 
@@ -30,7 +31,7 @@ Runs **100% in your browser** — no install, no server, no account. Only paper 
 
 ## Why use this?
 
-| Pain | What BibTeX Verifier does |
+| Pain | What Local Citation Verifier does |
 |------|---------------------------|
 | ChatGPT invented three papers | Flags **no-match** / weak-match titles so you delete hallucinations |
 | Google Scholar tab × 80 | **Batch lookup** with adaptive rate limiting |
@@ -43,6 +44,7 @@ Runs **100% in your browser** — no install, no server, no account. Only paper 
 
 - **Drag-and-drop** or **paste** BibTeX from Overleaf
 - **Dual-source** checks (Semantic Scholar + CrossRef)
+- **Local GPU reranking** for ambiguous preprint vs. journal/conference matches using Gemma 4 WebGPU
 - **Hallucination detection** — titles that don’t exist in major indexes
 - **Pill-style diffs** — choose your text vs. suggested metadata per field
 - **Live BibTeX preview** with diff highlighting; **copy** or **download** the final file
@@ -69,13 +71,15 @@ Upload or paste .bib → Parse entries → For each entry:
 
 ### Online (recommended)
 
-**[https://merfanian.github.io/Bibtex-Verifier/](https://merfanian.github.io/Bibtex-Verifier/)**
+After publishing to GitHub Pages:
+
+**`https://jhlee0619.github.io/local-citation-verifier/`**
 
 ### Local
 
 ```bash
-git clone https://github.com/merfanian/Bibtex-Verifier.git
-cd Bibtex-Verifier
+git clone https://github.com/jhlee0619/local-citation-verifier.git
+cd local-citation-verifier
 npx serve docs
 ```
 
@@ -87,7 +91,7 @@ Open the URL shown (often `http://localhost:3000`).
 
 | Path | Role |
 |------|------|
-| `docs/` | GitHub Pages app: `index.html`, `style.css`, `app.js`, `lib.js` |
+| `docs/` | GitHub Pages app: `index.html`, `style.css`, `app.js`, `lib.js`, `gemma-reranker.js` |
 | `tests/test_lib.js` | Node tests for `lib.js` |
 | `.github/workflows/` | CI + Pages deploy |
 

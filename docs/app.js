@@ -117,7 +117,7 @@
     return (data?.message?.items || []).map(B.crossrefToStandard);
   }
 
-  async function lookupPaper(title) {
+  async function lookupPaperFast(title) {
     const ssMatch = await searchSSMatch(title);
     if (ssMatch && B.titleSimilarity(title, ssMatch.title || "") >= B.MIN_TITLE_SIM) {
       const crCandidates = await searchCrossref(title);
@@ -133,6 +133,63 @@
 
     const ssCandidates = await searchSSSearch(title);
     return B.bestMatch(ssCandidates, title);
+  }
+
+  async function searchCandidatePool(title) {
+    const candidates = [];
+    const ssMatch = await searchSSMatch(title);
+    if (ssMatch) candidates.push(ssMatch);
+
+    const crCandidates = await searchCrossref(title);
+    candidates.push(...crCandidates);
+
+    const ssCandidates = await searchSSSearch(title);
+    candidates.push(...ssCandidates);
+
+    return B.dedupeCandidates(candidates);
+  }
+
+  function mergeSamePaperMetadata(primary, candidates) {
+    let merged = { ...primary };
+    for (const candidate of candidates) {
+      if (candidate === primary) continue;
+      if (B.isSamePaper(merged, candidate))
+        merged = B.mergeMetadata(merged, candidate);
+    }
+    return merged;
+  }
+
+  async function lookupPaperWithRerank(title, original) {
+    const candidates = await searchCandidatePool(title);
+    const preferPublished = optPreferPublished?.checked !== false;
+    const ranked = B.rerankCandidates(candidates, original, { preferPublished });
+    if (!ranked.best) return null;
+
+    let selected = ranked.best;
+    if (candidates.length > 1 && window.BibGemmaReranker) {
+      try {
+        const aiChoice = await window.BibGemmaReranker.rerank({
+          original,
+          candidates,
+          parseChoice: B.parseRerankChoice,
+          preferPublished,
+          onStatus: setGemmaRerankStatus,
+        });
+        if (aiChoice?.candidate)
+          selected = aiChoice.candidate;
+      } catch (err) {
+        console.warn("Gemma rerank failed; using heuristic candidate:", err.message);
+        setGemmaRerankStatus("Gemma unavailable · using heuristic rerank");
+      }
+    }
+
+    return mergeSamePaperMetadata(selected, candidates);
+  }
+
+  async function lookupPaper(title, original) {
+    if (!optLocalGpuRerank?.checked)
+      return lookupPaperFast(title);
+    return lookupPaperWithRerank(title, original);
   }
 
   // ─── Theme ─────────────────────────────────────────────────────────
@@ -373,7 +430,7 @@
       if (isTourFakeEntry) {
         await sleep(500);
       } else {
-        try { found = await lookupPaper(cleanTitle); } catch (err) { console.warn("Lookup failed:", err); }
+        try { found = await lookupPaper(cleanTitle, entry); } catch (err) { console.warn("Lookup failed:", err); }
       }
 
       if (!found) {
@@ -1468,7 +1525,14 @@
   const optRemoveNotFound = $("#opt-remove-notfound");
   const optMaxAuthors = $("#opt-max-authors");
   const optPreferPublished = $("#opt-prefer-published");
+  const optLocalGpuRerank = $("#opt-local-gpu-rerank");
+  const gpuRerankStatus = $("#gpu-rerank-status");
   const dedupCriteriaWrap = $("#dedup-criteria-wrap");
+
+  function setGemmaRerankStatus(message) {
+    if (!gpuRerankStatus) return;
+    gpuRerankStatus.textContent = message;
+  }
 
   settingsToggle.addEventListener("click", (e) => {
     e.stopPropagation();
@@ -1490,6 +1554,11 @@
 
   [optRemoveNotFound, optPreferPublished].forEach(el =>
     el.addEventListener("change", updatePreview));
+  optLocalGpuRerank?.addEventListener("change", () => {
+    setGemmaRerankStatus(optLocalGpuRerank.checked
+      ? "On · first run downloads and caches Gemma 4"
+      : "Off · uses Gemma 4 WebGPU when enabled");
+  });
   optMaxAuthors.addEventListener("change", () => {
     updateAuthorPills();
     updatePreview();
@@ -1557,7 +1626,7 @@
   const introOnboardingSteps = [
     {
       title: "Welcome",
-      body: "BibTeX Verifier checks each entry against CrossRef and Semantic Scholar — wrong metadata, missing DOIs, duplicates, and citations that don’t exist online (including AI hallucinations). Your file stays in the browser.",
+      body: "Local Citation Verifier checks each entry against CrossRef and Semantic Scholar — wrong metadata, missing DOIs, duplicates, and citations that don’t exist online (including AI hallucinations). Your file stays in the browser.",
       target: null,
     },
     {
