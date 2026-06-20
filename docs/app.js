@@ -166,9 +166,12 @@
     if (!ranked.best) return null;
 
     let selected = ranked.best;
-    if (candidates.length > 1 && window.BibGemmaReranker) {
+    const provider = getRerankProvider();
+    if (candidates.length > 1 && provider !== "off") {
       try {
-        const aiChoice = await window.BibGemmaReranker.rerank({
+        const reranker = provider === "vllm" ? window.BibVllmReranker : window.BibGemmaReranker;
+        if (!reranker) throw new Error(`${provider} reranker is unavailable.`);
+        const aiChoice = await reranker.rerank({
           original,
           candidates,
           parseChoice: B.parseRerankChoice,
@@ -178,8 +181,8 @@
         if (aiChoice?.candidate)
           selected = aiChoice.candidate;
       } catch (err) {
-        console.warn("Gemma rerank failed; using heuristic candidate:", err.message);
-        setGemmaRerankStatus("Gemma unavailable · using heuristic rerank");
+        console.warn(`${provider} rerank failed; using heuristic candidate:`, err.message);
+        setGemmaRerankStatus(`${provider === "vllm" ? "vLLM" : "Gemma"} unavailable · using heuristic rerank`);
       }
     }
 
@@ -187,7 +190,7 @@
   }
 
   async function lookupPaper(title, original) {
-    if (!optLocalGpuRerank?.checked)
+    if (getRerankProvider() === "off")
       return lookupPaperFast(title);
     return lookupPaperWithRerank(title, original);
   }
@@ -1526,12 +1529,34 @@
   const optMaxAuthors = $("#opt-max-authors");
   const optPreferPublished = $("#opt-prefer-published");
   const optLocalGpuRerank = $("#opt-local-gpu-rerank");
+  const optRerankProvider = $("#opt-rerank-provider");
   const gpuRerankStatus = $("#gpu-rerank-status");
   const dedupCriteriaWrap = $("#dedup-criteria-wrap");
+
+  function getRerankProvider() {
+    if (!optLocalGpuRerank?.checked) return "off";
+    return optRerankProvider?.value || "webgpu";
+  }
+
+  function describeRerankProvider() {
+    const provider = getRerankProvider();
+    if (provider === "off") return "Off · uses heuristic matching";
+    if (provider === "vllm") return "On · vLLM server rerank";
+    return "On · WebGPU Gemma by default";
+  }
 
   function setGemmaRerankStatus(message) {
     if (!gpuRerankStatus) return;
     gpuRerankStatus.textContent = message;
+  }
+
+  async function detectVllmServer() {
+    if (!window.BibVllmReranker || !optRerankProvider || !optLocalGpuRerank) return;
+    const health = await window.BibVllmReranker.health();
+    if (!health?.ready) return;
+    optLocalGpuRerank.checked = true;
+    optRerankProvider.value = "vllm";
+    setGemmaRerankStatus(`On · vLLM server ready${health.model ? ` (${health.model})` : ""}`);
   }
 
   settingsToggle.addEventListener("click", (e) => {
@@ -1555,10 +1580,13 @@
   [optRemoveNotFound, optPreferPublished].forEach(el =>
     el.addEventListener("change", updatePreview));
   optLocalGpuRerank?.addEventListener("change", () => {
-    setGemmaRerankStatus(optLocalGpuRerank.checked
-      ? "On · first run downloads and caches Gemma 4"
-      : "Off · uses Gemma 4 WebGPU when enabled");
+    setGemmaRerankStatus(describeRerankProvider());
   });
+  optRerankProvider?.addEventListener("change", () => {
+    if (optLocalGpuRerank) optLocalGpuRerank.checked = true;
+    setGemmaRerankStatus(describeRerankProvider());
+  });
+  detectVllmServer();
   optMaxAuthors.addEventListener("change", () => {
     updateAuthorPills();
     updatePreview();

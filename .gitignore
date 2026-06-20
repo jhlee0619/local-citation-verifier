@@ -5,6 +5,7 @@ dist/
 build/
 venv/
 .venv/
+.venv-vllm/
 .env
 *.bib
 !test_refs.bib

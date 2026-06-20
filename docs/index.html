@@ -248,10 +248,17 @@
             <svg class="setting-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4"/><path d="M12 18v4"/><path d="M4.93 4.93l2.83 2.83"/><path d="M16.24 16.24l2.83 2.83"/><path d="M2 12h4"/><path d="M18 12h4"/><path d="M4.93 19.07l2.83-2.83"/><path d="M16.24 7.76l2.83-2.83"/><circle cx="12" cy="12" r="3"/></svg>
             <label class="option-toggle">
               <input type="checkbox" id="opt-local-gpu-rerank" checked />
-              <span>Local GPU rerank</span>
+              <span>Local AI rerank</span>
             </label>
           </div>
-          <div class="sub-option visible gpu-rerank-note" id="gpu-rerank-status">On · first run downloads and caches Gemma 4</div>
+          <div class="sub-option visible rerank-provider-wrap">
+            <span class="sub-label">engine:</span>
+            <select id="opt-rerank-provider" class="option-select">
+              <option value="webgpu" selected>WebGPU Gemma</option>
+              <option value="vllm">vLLM server</option>
+            </select>
+          </div>
+          <div class="sub-option visible gpu-rerank-note" id="gpu-rerank-status">On · WebGPU Gemma by default</div>
         </div>
       </div>
 
@@ -269,6 +276,7 @@
   <script src="https://unpkg.com/fuzzball@2.2.3/dist/fuzzball.umd.min.js"></script>
   <script src="lib.js"></script>
   <script src="gemma-reranker.js"></script>
+  <script src="vllm-reranker.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
