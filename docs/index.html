@@ -42,25 +42,17 @@
 <body>
   <div class="page-wrap">
 
-    <header class="hero">
+    <main class="command-surface">
+    <header class="hero mission-panel">
       <div class="hero-grid">
         <div class="hero-copy">
-          <p class="hero-kicker">Citation QA desk / WebGPU rerank</p>
+          <p class="hero-kicker">Local bibliography control room</p>
           <h1>Local Citation Verifier</h1>
-          <p class="hero-tagline">Audit a BibTeX file against real publication records, then resolve metadata diffs without leaving the browser.</p>
+          <p class="hero-tagline">Move from raw `.bib` to evidence-backed metadata decisions in one browser workspace.</p>
           <div class="hero-signals" aria-label="Primary checks">
-            <span><strong>CrossRef</strong> metadata</span>
-            <span><strong>Semantic Scholar</strong> matching</span>
-            <span><strong>Gemma</strong> local rerank</span>
-          </div>
-        </div>
-        <div class="hero-visual" aria-hidden="true">
-          <div class="signal-board">
-            <div class="signal-row signal-good"><span>doi</span><strong>10.1145/...</strong></div>
-            <div class="signal-row signal-warn"><span>venue</span><strong>preprint vs journal</strong></div>
-            <div class="signal-row signal-hot"><span>title</span><strong>weak index match</strong></div>
-            <div class="signal-rule"></div>
-            <div class="signal-foot">local GPU rerank enabled</div>
+            <span><strong>01</strong> Parse locally</span>
+            <span><strong>02</strong> Match records</span>
+            <span><strong>03</strong> Resolve diffs</span>
           </div>
         </div>
         <div class="hero-top-right">
@@ -93,13 +85,38 @@
       </div>
     </header>
 
-    <section class="workspace-shell" aria-label="BibTeX input">
+    <aside class="intel-panel" aria-label="Verification routing">
+      <div class="intel-panel-head">
+        <p class="section-kicker">Route</p>
+        <h2>Evidence before edits</h2>
+      </div>
+      <div class="route-list">
+        <div class="route-item route-active">
+          <span>CrossRef</span>
+          <strong>publication metadata</strong>
+        </div>
+        <div class="route-item route-active">
+          <span>Semantic Scholar</span>
+          <strong>title and author match</strong>
+        </div>
+        <div class="route-item route-gpu">
+          <span>Gemma WebGPU</span>
+          <strong>local candidate rerank</strong>
+        </div>
+      </div>
+      <div class="privacy-note">
+        <strong>Browser-first by design.</strong>
+        Your bibliography is parsed locally. Only lookup titles and model assets cross the network.
+      </div>
+    </aside>
+
+    <section class="workspace-shell import-panel" aria-label="BibTeX input">
       <div class="workspace-header">
         <div>
-          <p class="section-kicker">Input</p>
-          <h2>Start with a bibliography</h2>
+          <p class="section-kicker">Import</p>
+          <h2>Load the file under review</h2>
         </div>
-        <p>Drop a file or paste raw BibTeX. Verification begins locally, then title lookups are sent to public academic indexes.</p>
+        <p>Start from a `.bib` file or a paste buffer. The review queue appears below as soon as parsing begins.</p>
       </div>
 
     <div class="input-tabs">
@@ -127,6 +144,7 @@
       <button class="btn-verify-paste" id="btn-verify-paste">Verify pasted BibTeX</button>
     </div>
     </section>
+    </main>
 
     <div class="results-section">
       <div class="summary-bar">
@@ -205,96 +223,83 @@
     </div>
     </div>
 
-    <section class="how-it-works info-section" id="how-it-works">
-      <h2>How it works</h2>
-      <div class="steps">
-        <div class="step">
-          <div class="step-num">1</div>
-          <h3>Upload or paste</h3>
-          <p>Drop your <code>.bib</code> file or paste directly from Overleaf. Everything is parsed in your browser — nothing is uploaded to any server.</p>
+    <section class="method-board info-section" id="how-it-works">
+      <div class="method-heading">
+        <p class="section-kicker">Verification route</p>
+        <h2>From citation text to reviewable evidence</h2>
+      </div>
+      <div class="method-timeline">
+        <div class="method-step">
+          <span>01</span>
+          <h3>Local parse</h3>
+          <p>The `.bib` is tokenized in the browser, preserving editable fields and internal entry ids.</p>
         </div>
-        <div class="step">
-          <div class="step-num">2</div>
-          <h3>Verify</h3>
-          <p>Each entry is looked up by title against Semantic Scholar and CrossRef. Authors, year, venue, DOI, and other fields are compared to the published record. Entries that don't match any real publication are flagged — perfect for catching AI-hallucinated citations.</p>
+        <div class="method-step">
+          <span>02</span>
+          <h3>Index lookup</h3>
+          <p>Titles query Semantic Scholar and CrossRef, then candidates are normalized into one metadata shape.</p>
         </div>
-        <div class="step">
-          <div class="step-num">3</div>
-          <h3>Review &amp; edit</h3>
-          <p>Results are color-coded: <strong class="c-green">Verified</strong> means everything matches,
-            <strong class="c-yellow">Auto-Updated</strong> shows a diff you can accept or edit inline,
-            and <strong class="c-red">Needs Review</strong> flags possible errors. A live preview shows the corrected BibTeX in real time.</p>
+        <div class="method-step">
+          <span>03</span>
+          <h3>Candidate arbitration</h3>
+          <p>Duplicate, preprint, and published records are ranked heuristically, then optionally reranked on local WebGPU.</p>
         </div>
-        <div class="step">
-          <div class="step-num">4</div>
-          <h3>Download</h3>
-          <p>Download or copy the corrected <code>.bib</code> file with your changes applied. Ready for LaTeX, Overleaf, or any reference manager.</p>
+        <div class="method-step">
+          <span>04</span>
+          <h3>Human decision</h3>
+          <p>Field-level diffs let you accept, revert, remove, or edit before exporting corrected BibTeX.</p>
         </div>
       </div>
     </section>
 
-    <section class="features info-section">
-      <h2>Features</h2>
-      <div class="feature-grid">
-        <div class="feature-card">
-          <div class="feature-icon">F1</div>
-          <h3>Hallucination detection</h3>
-          <p>Flags entries whose titles don't match any known publication — catches fabricated references from AI-generated bibliographies.</p>
-        </div>
-        <div class="feature-card">
-          <div class="feature-icon">F2</div>
-          <h3>Dual-source verification</h3>
-          <p>Queries both Semantic Scholar and CrossRef to maximize coverage and metadata quality.</p>
-        </div>
-        <div class="feature-card">
-          <div class="feature-icon">F3</div>
-          <h3>Field-by-field diff</h3>
-          <p>See exactly which fields differ — authors, year, venue, DOI, pages — with inline editing and a live BibTeX preview.</p>
-        </div>
-        <div class="feature-card">
-          <div class="feature-icon">F4</div>
-          <h3>Privacy-first</h3>
-          <p>Your file never leaves the browser. Only paper titles are sent to public academic APIs for lookup. No server, no tracking.</p>
-        </div>
-        <div class="feature-card">
-          <div class="feature-icon">F5</div>
-          <h3>DOI &amp; metadata enrichment</h3>
-          <p>Fills in missing DOIs, publisher info, volume, pages, and other metadata from the online record automatically.</p>
-        </div>
-        <div class="feature-card">
-          <div class="feature-icon">F6</div>
-          <h3>Smart matching</h3>
-          <p>Fuzzy title matching, LaTeX-aware text processing, and last-name-based author comparison handle real-world formatting differences.</p>
-        </div>
+    <section class="evidence-ledger info-section">
+      <div class="ledger-heading">
+        <p class="section-kicker">Evidence ledger</p>
+        <h2>What the desk watches</h2>
+      </div>
+      <div class="ledger-grid">
+        <article>
+          <span>Mismatch</span>
+          <strong>AI-hallucinated or mistyped titles</strong>
+          <p>Weak or missing matches are surfaced as review work instead of silently rewritten.</p>
+        </article>
+        <article>
+          <span>Versioning</span>
+          <strong>Preprint vs. conference or journal records</strong>
+          <p>Published records can be preferred while still keeping the candidate trail visible.</p>
+        </article>
+        <article>
+          <span>Metadata</span>
+          <strong>DOI, venue, pages, publisher, volume</strong>
+          <p>Missing fields are enriched from indexed records and shown as explicit diffs.</p>
+        </article>
+        <article>
+          <span>Output</span>
+          <strong>Exportable corrected BibTeX</strong>
+          <p>The live preview updates as decisions are made, ready for LaTeX or Overleaf.</p>
+        </article>
       </div>
     </section>
 
-    <section class="faq info-section">
-      <h2>FAQ</h2>
-      <details>
-        <summary>Can it detect AI-hallucinated references?</summary>
-        <p>Yes. When a BibTeX entry's title doesn't match any real publication in CrossRef or Semantic Scholar, it's flagged as "Not Found" or "Needs Review." This is how fabricated citations from ChatGPT, Copilot, or other AI tools get caught — the paper simply doesn't exist in any academic database.</p>
-      </details>
-      <details>
-        <summary>Is my data safe?</summary>
-        <p>Yes. Your <code>.bib</code> file is parsed entirely in your browser using JavaScript. The only network requests made are title lookups to the public CrossRef and Semantic Scholar APIs. No file content is sent to any server.</p>
-      </details>
-      <details>
-        <summary>Why are some entries "Not Found"?</summary>
-        <p>Not every paper is indexed in CrossRef or Semantic Scholar. ArXiv preprints, workshop papers, theses, and very recent publications may not be found. The tool flags these so you can verify them manually — or remove them if they're fabricated.</p>
-      </details>
-      <details>
-        <summary>Why does verification take a while?</summary>
-        <p>To respect the free APIs' rate limits, requests are sent at a controlled pace with adaptive throttling. For a file with 50 entries, expect roughly 2–3 minutes. You can review results and change settings while it's still processing.</p>
-      </details>
-      <details>
-        <summary>Does it work with Overleaf?</summary>
-        <p>Yes! You can copy your entire <code>.bib</code> file from Overleaf and paste it directly into the "Paste BibTeX" tab. After reviewing, download the corrected file and upload it back to Overleaf.</p>
-      </details>
-      <details>
-        <summary>Is this open source?</summary>
-        <p>Yes. This project is based on <a href="https://github.com/merfanian/Bibtex-Verifier" target="_blank" rel="noopener">BibTeX Verifier</a> by merfanian, licensed under MIT. This fork adds local WebGPU reranking for ambiguous paper matches.</p>
-      </details>
+    <section class="operating-notes info-section">
+      <div class="note-column">
+        <p class="section-kicker">Privacy model</p>
+        <h2>Local file, public lookups, local rerank.</h2>
+      </div>
+      <div class="note-column">
+        <details open>
+          <summary>What leaves the browser?</summary>
+          <p>Paper titles are sent to CrossRef and Semantic Scholar for lookup. The full BibTeX file is not uploaded to an app server.</p>
+        </details>
+        <details>
+          <summary>Where does Gemma run?</summary>
+          <p>GitHub Pages serves the static app. Gemma WebGPU assets load in the visitor's browser, and inference runs on that visitor's PC when supported.</p>
+        </details>
+        <details>
+          <summary>What is the source?</summary>
+          <p>This project is based on <a href="https://github.com/merfanian/Bibtex-Verifier" target="_blank" rel="noopener">BibTeX Verifier</a> by merfanian, licensed under MIT.</p>
+        </details>
+      </div>
     </section>
 
     <footer class="site-footer info-section">

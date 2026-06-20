@@ -3053,3 +3053,362 @@ body {
     border-top: 0;
   }
 }
+
+.command-surface {
+  display: grid;
+  grid-template-columns: minmax(320px, 0.78fr) minmax(440px, 1fr);
+  grid-template-areas:
+    "mission import"
+    "intel import";
+  gap: 1rem;
+  align-items: stretch;
+  margin-bottom: 1rem;
+}
+
+.mission-panel {
+  grid-area: mission;
+  margin: 0;
+  min-height: 0;
+}
+
+.mission-panel .hero-grid {
+  grid-template-columns: minmax(0, 1fr) auto;
+  min-height: 100%;
+}
+
+.mission-panel .hero-copy {
+  max-width: 680px;
+}
+
+.mission-panel .hero h1,
+.mission-panel h1 {
+  font-size: clamp(3.1rem, 5.8vw, 7rem);
+}
+
+.mission-panel .hero-top-right {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.mission-panel .hero-overview-toggle,
+.mission-panel .hero-overview {
+  grid-column: 1 / -1;
+}
+
+.mission-panel .hero-overview {
+  max-width: none;
+}
+
+.import-panel {
+  grid-area: import;
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  min-height: 680px;
+}
+
+.import-panel .workspace-header {
+  grid-template-columns: 1fr;
+  align-items: start;
+}
+
+.import-panel .tab-panel.active {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+}
+
+.import-panel .upload-zone {
+  flex: 1;
+  min-height: 420px;
+  align-items: flex-start;
+  justify-content: flex-end;
+  text-align: left;
+  padding: clamp(1rem, 3vw, 2rem);
+}
+
+.import-panel .upload-zone .label {
+  max-width: 22rem;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: clamp(1.8rem, 4vw, 3.8rem);
+  line-height: 0.96;
+}
+
+.import-panel .upload-zone p {
+  max-width: 28rem;
+}
+
+.import-panel .bib-textarea {
+  flex: 1;
+  min-height: 430px;
+}
+
+.intel-panel {
+  grid-area: intel;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  gap: 1rem;
+  padding: clamp(1rem, 2vw, 1.35rem);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.028), transparent),
+    var(--surface);
+}
+
+.intel-panel h2 {
+  margin: 0;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: clamp(1.5rem, 2.2vw, 2.35rem);
+  line-height: 1;
+}
+
+.route-list {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.route-item {
+  display: grid;
+  grid-template-columns: minmax(8rem, 0.45fr) 1fr;
+  gap: 0.8rem;
+  align-items: center;
+  min-height: 58px;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: rgba(0, 0, 0, 0.12);
+}
+
+[data-theme="light"] .route-item {
+  background: rgba(255, 250, 240, 0.5);
+}
+
+.route-item span {
+  color: var(--text-dim);
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+}
+
+.route-item strong {
+  color: var(--text);
+  font-size: 0.95rem;
+}
+
+.route-active {
+  border-color: var(--green-border);
+}
+
+.route-gpu {
+  border-color: var(--accent);
+  background: var(--accent-bg);
+}
+
+.privacy-note {
+  padding-top: 0.95rem;
+  border-top: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.privacy-note strong {
+  display: block;
+  color: var(--text);
+  margin-bottom: 0.2rem;
+}
+
+.results-section {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.018);
+  padding: 0.75rem;
+}
+
+.method-board,
+.evidence-ledger,
+.operating-notes {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: clamp(1rem, 2.2vw, 1.5rem);
+}
+
+.method-heading,
+.ledger-heading,
+.operating-notes {
+  display: grid;
+  grid-template-columns: minmax(0, 0.55fr) minmax(320px, 1fr);
+  gap: 1.25rem;
+  align-items: start;
+}
+
+.method-heading h2,
+.ledger-heading h2,
+.operating-notes h2 {
+  margin: 0;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: clamp(2rem, 4.5vw, 4.8rem);
+  line-height: 0.95;
+  text-wrap: balance;
+}
+
+.method-timeline {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-top: 1.4rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.method-step {
+  min-height: 220px;
+  padding: 1rem;
+  border-right: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.018);
+}
+
+.method-step:last-child {
+  border-right: 0;
+}
+
+.method-step span,
+.ledger-grid article span {
+  display: inline-flex;
+  margin-bottom: 1.1rem;
+  color: var(--accent);
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 0.74rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.method-step h3,
+.ledger-grid article strong {
+  display: block;
+  color: var(--text);
+  font-size: 1rem;
+  line-height: 1.25;
+}
+
+.method-step p,
+.ledger-grid article p,
+.operating-notes details p {
+  margin-top: 0.75rem;
+  color: var(--text-dim);
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.ledger-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0;
+  margin-top: 1.4rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.ledger-grid article {
+  padding: 1rem;
+  min-height: 190px;
+  border-right: 1px solid var(--border);
+}
+
+.ledger-grid article:last-child {
+  border-right: 0;
+}
+
+.operating-notes .note-column:last-child {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.operating-notes details {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.85rem 1rem;
+  background: rgba(255, 255, 255, 0.018);
+}
+
+.operating-notes summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+
+@media (max-width: 1180px) {
+  .command-surface {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "mission"
+      "import"
+      "intel";
+  }
+
+  .import-panel {
+    min-height: auto;
+  }
+
+  .method-timeline,
+  .ledger-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .method-step:nth-child(2n),
+  .ledger-grid article:nth-child(2n) {
+    border-right: 0;
+  }
+
+  .method-step:nth-child(n + 3),
+  .ledger-grid article:nth-child(n + 3) {
+    border-top: 1px solid var(--border);
+  }
+}
+
+@media (max-width: 760px) {
+  .command-surface,
+  .mission-panel .hero-grid,
+  .method-heading,
+  .ledger-heading,
+  .operating-notes {
+    grid-template-columns: 1fr;
+  }
+
+  .mission-panel .hero-top-right {
+    grid-column: 1;
+    grid-row: auto;
+    justify-content: flex-start;
+  }
+
+  .mission-panel h1 {
+    font-size: clamp(2.55rem, 15vw, 4rem);
+  }
+
+  .import-panel .upload-zone {
+    min-height: 330px;
+  }
+
+  .import-panel .upload-zone .label {
+    font-size: clamp(1.7rem, 11vw, 3rem);
+  }
+
+  .route-item,
+  .method-timeline,
+  .ledger-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .method-step,
+  .ledger-grid article {
+    border-right: 0;
+    border-top: 1px solid var(--border);
+  }
+
+  .method-step:first-child,
+  .ledger-grid article:first-child {
+    border-top: 0;
+  }
+}
