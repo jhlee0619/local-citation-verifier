@@ -496,6 +496,21 @@
     return score;
   }
 
+  function topCandidates(candidates, original, options = {}) {
+    const limit = Math.max(0, Math.floor(Number(options.limit ?? 3)));
+    if (!limit) return [];
+    return dedupeCandidates(candidates)
+      .map((candidate, index) => ({
+        candidate,
+        index,
+        score: candidateScore(candidate, original, options),
+      }))
+      .filter(item => item.score !== -Infinity)
+      .sort((a, b) => b.score - a.score || a.index - b.index)
+      .slice(0, limit)
+      .map(item => item.candidate);
+  }
+
   function rerankCandidates(candidates, original, options = {}) {
     const unique = dedupeCandidates(candidates);
     let best = null;
@@ -693,6 +708,7 @@
   exports.isPreprintVenue = isPreprintVenue;
   exports.dedupeCandidates = dedupeCandidates;
   exports.candidateScore = candidateScore;
+  exports.topCandidates = topCandidates;
   exports.rerankCandidates = rerankCandidates;
   exports.parseRerankChoice = parseRerankChoice;
   exports.resolveRerankStatus = resolveRerankStatus;

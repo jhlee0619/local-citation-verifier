@@ -554,6 +554,23 @@ test("prefers a published version over an arXiv/preprint candidate when title an
   assert.strictEqual(result.bestIndex, 1);
 });
 
+
+test("limits candidate choices to the highest scoring matches", () => {
+  const original = { title: "Attention Is All You Need", author: "Vaswani, Ashish", year: "2017" };
+  const candidates = [
+    { title: "Attention Is All You Need", author: "Vaswani, Ashish", year: "2017", journal: "arXiv" },
+    { title: "Attention Is All You Need", author: "Vaswani, Ashish", year: "2017", journal: "NeurIPS", doi: "10.5555/3295222.3295349" },
+    { title: "Attention Is All You Need", author: "Vaswani, Ashish", year: "2017", journal: "Journal A", doi: "10.1/a" },
+    { title: "Unrelated", author: "Someone Else", year: "2024", journal: "Journal B" },
+  ];
+
+  const top = lib.topCandidates(candidates, original, { preferPublished: true, limit: 2 });
+
+  assert.strictEqual(top.length, 2);
+  assert.strictEqual(top[0].doi, "10.5555/3295222.3295349");
+  assert.strictEqual(top[1].doi, "10.1/a");
+});
+
 test("deduplicates candidates by DOI and same normalized title plus venue", () => {
   const candidates = [
     { title: "A Study", doi: "10.1000/XYZ", journal: "Journal A" },

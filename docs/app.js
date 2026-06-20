@@ -10,6 +10,7 @@
   const SS_FIELDS = "title,authors,year,venue,publicationVenue,externalIds";
   const MAX_RETRIES = 4;
   const RETRY_BASE_MS = 1500;
+  const MAX_CANDIDATE_CHOICES = 3;
 
   // ─── Adaptive rate controller ──────────────────────────────────────
   const rateState = {
@@ -140,11 +141,11 @@
     const ssMatch = await searchSSMatch(title);
     if (ssMatch) candidates.push(ssMatch);
 
-    const crCandidates = await searchCrossref(title);
-    candidates.push(...crCandidates);
-
-    const ssCandidates = await searchSSSearch(title);
-    candidates.push(...ssCandidates);
+    const [crCandidates, ssCandidates] = await Promise.all([
+      searchCrossref(title),
+      searchSSSearch(title),
+    ]);
+    candidates.push(...crCandidates, ...ssCandidates);
 
     return B.dedupeCandidates(candidates);
   }
@@ -178,19 +179,23 @@
   async function lookupPaperWithRerank(title, original) {
     const candidates = await searchCandidatePool(title);
     const preferPublished = optPreferPublished?.checked !== false;
-    const ranked = B.rerankCandidates(candidates, original, { preferPublished });
+    const candidateChoices = B.topCandidates(candidates, original, {
+      preferPublished,
+      limit: MAX_CANDIDATE_CHOICES,
+    });
+    const ranked = B.rerankCandidates(candidateChoices, original, { preferPublished });
     if (!ranked.best) return null;
 
     let selected = ranked.best;
     let aiChoice = null;
     const provider = getRerankProvider();
-    if (candidates.length > 1 && provider !== "off") {
+    if (candidateChoices.length > 1 && provider !== "off") {
       try {
         const reranker = provider === "vllm" ? window.BibVllmReranker : window.BibGemmaReranker;
         if (!reranker) throw new Error(`${provider} reranker is unavailable.`);
         aiChoice = await reranker.rerank({
           original,
-          candidates,
+          candidates: candidateChoices,
           parseChoice: B.parseRerankChoice,
           preferPublished,
           onStatus: setGemmaRerankStatus,
@@ -203,11 +208,11 @@
       }
     }
 
-    const selectedIndex = candidates.indexOf(selected);
+    const selectedIndex = candidateChoices.indexOf(selected);
     return attachRerankDecision(
-      mergeSamePaperMetadata(selected, candidates),
+      mergeSamePaperMetadata(selected, candidateChoices),
       aiChoice,
-      candidates,
+      candidateChoices,
       selectedIndex >= 0 ? selectedIndex : ranked.bestIndex
     );
   }
@@ -569,7 +574,7 @@
     return `<div class="candidate-panel">
       <div class="candidate-panel-head">
         <span>Candidate choices</span>
-        <span>${choices.length} found · reranked locally</span>
+        <span>${choices.length} shown · reranked locally</span>
       </div>
       <div class="candidate-options">${rows}</div>
       <div class="candidate-control-row">
