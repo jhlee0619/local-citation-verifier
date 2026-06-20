@@ -468,6 +468,38 @@ test("fills empty fields from secondary", () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════
+console.log("\n── candidate application ──");
+
+test("paperUrlForEntry prefers DOI landing page", () => {
+  const entry = { doi: "10.1234/ABC", url: "https://example.test/paper" };
+  assert.strictEqual(lib.paperUrlForEntry(entry), "https://doi.org/10.1234/ABC");
+});
+
+test("paperUrlForEntry falls back to URL when DOI is missing", () => {
+  const entry = { url: "https://example.test/paper" };
+  assert.strictEqual(lib.paperUrlForEntry(entry), "https://example.test/paper");
+});
+
+test("applyCandidateToEntry preserves BibTeX identity and skips internal fields", () => {
+  const original = { ENTRYTYPE: "article", ID: "smith2024", title: "Draft", note: "keep" };
+  const candidate = {
+    title: "Published",
+    year: "2024",
+    doi: "10.1234/published",
+    _source: "crossref",
+  };
+  const result = lib.applyCandidateToEntry(original, candidate);
+
+  assert.strictEqual(result.ENTRYTYPE, "article");
+  assert.strictEqual(result.ID, "smith2024");
+  assert.strictEqual(result.title, "Published");
+  assert.strictEqual(result.year, "2024");
+  assert.strictEqual(result.doi, "10.1234/published");
+  assert.strictEqual(result.note, "keep");
+  assert.ok(!("_source" in result));
+});
+
+// ═══════════════════════════════════════════════════════════════════════
 console.log("\n── bestMatch ──");
 
 test("returns best matching candidate above threshold", () => {

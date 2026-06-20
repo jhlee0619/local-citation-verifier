@@ -842,6 +842,7 @@ code {
 .tag-needs_review { background: var(--yellow-bg); color: var(--yellow); }
 .tag-not_found { background: var(--red-bg); color: var(--red); }
 .tag-duplicate { background: var(--purple-bg); color: var(--purple); }
+.tag-excluded { background: var(--red-bg); color: var(--red); }
 
 .entry-tags {
   display: flex;
@@ -858,6 +859,163 @@ code {
 }
 
 .duplicate-row strong { color: var(--text); }
+
+.entry-card.is-excluded {
+  opacity: 0.72;
+}
+
+.candidate-panel {
+  margin-top: 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-alt);
+  overflow: hidden;
+}
+
+.candidate-panel-head,
+.candidate-control-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.55rem 0.65rem;
+}
+
+.candidate-panel-head {
+  font-size: 0.76rem;
+  color: var(--text-dim);
+  border-bottom: 1px solid var(--border);
+}
+
+.candidate-panel-head span:first-child {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.candidate-options {
+  display: grid;
+}
+
+.candidate-option {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: stretch;
+  border-bottom: 1px solid var(--border);
+}
+
+.candidate-option.active {
+  background: var(--accent-bg);
+}
+
+.candidate-option-btn {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.6rem 0.65rem;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.candidate-rank {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 0.74rem;
+}
+
+.candidate-option.active .candidate-rank {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.candidate-main {
+  display: grid;
+  gap: 0.18rem;
+  min-width: 0;
+}
+
+.candidate-title,
+.candidate-meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.candidate-title {
+  font-size: 0.84rem;
+  font-weight: 600;
+}
+
+.candidate-meta,
+.candidate-score,
+.candidate-doi {
+  color: var(--text-dim);
+  font-size: 0.74rem;
+}
+
+.candidate-doi::before {
+  content: " · DOI ";
+}
+
+.candidate-open-link,
+.paper-open-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0.5rem 0.55rem 0.5rem 0;
+  padding: 0.32rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  font-size: 0.74rem;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.candidate-open-link:hover,
+.paper-open-link:hover {
+  color: var(--text);
+  border-color: var(--text-dim);
+  text-decoration: none;
+}
+
+.paper-open-link {
+  margin-top: 0.7rem;
+}
+
+.candidate-control-row {
+  justify-content: flex-start;
+}
+
+.candidate-control-btn {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-dim);
+  padding: 0.4rem 0.65rem;
+  font-size: 0.76rem;
+  cursor: pointer;
+}
+
+.candidate-control-btn:hover,
+.candidate-control-btn.active {
+  color: var(--text);
+  border-color: var(--text-dim);
+}
+
+.candidate-control-btn.danger.active {
+  color: var(--red);
+  border-color: var(--red-border);
+  background: var(--red-bg);
+}
 
 /* ─── Diff table ───────────────────────────────────────────────── */
 .diff-table {

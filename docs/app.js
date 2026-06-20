@@ -159,14 +159,19 @@
     return merged;
   }
 
-  function attachRerankDecision(candidate, aiChoice) {
-    if (!aiChoice?.status) return candidate;
+  function attachRerankDecision(candidate, aiChoice, candidates, selectedIndex) {
     return {
       ...candidate,
-      _rerankStatus: aiChoice.status,
-      _rerankConfidence: aiChoice.confidence,
-      _rerankReason: aiChoice.reason || "",
-      _rerankRiskFlags: aiChoice.riskFlags || [],
+      _rerankStatus: aiChoice?.status || "",
+      _rerankConfidence: aiChoice?.confidence ?? null,
+      _rerankReason: aiChoice?.reason || "",
+      _rerankRiskFlags: aiChoice?.riskFlags || [],
+      _candidateChoices: candidates.map((choice, index) => ({
+        ...choice,
+        _choiceIndex: index,
+        _paperUrl: B.paperUrlForEntry(choice),
+      })),
+      _selectedCandidateIndex: selectedIndex,
     };
   }
 
@@ -198,7 +203,13 @@
       }
     }
 
-    return attachRerankDecision(mergeSamePaperMetadata(selected, candidates), aiChoice);
+    const selectedIndex = candidates.indexOf(selected);
+    return attachRerankDecision(
+      mergeSamePaperMetadata(selected, candidates),
+      aiChoice,
+      candidates,
+      selectedIndex >= 0 ? selectedIndex : ranked.bestIndex
+    );
   }
 
   async function lookupPaper(title, original) {
@@ -500,6 +511,10 @@
       ai_status: found ? (found._rerankStatus || "") : "",
       ai_reason: found ? (found._rerankReason || "") : "",
       ai_risk_flags: found ? (found._rerankRiskFlags || []) : [],
+      candidate_choices: found ? (found._candidateChoices || []) : [],
+      selected_candidate_index: found ? (found._selectedCandidateIndex ?? -1) : -1,
+      selected_choice: "auto",
+      paper_url: found ? B.paperUrlForEntry(found) : B.paperUrlForEntry(entry),
       duplicate_of: entry._duplicateOf || null,
     };
   }
@@ -507,6 +522,61 @@
   // ─── Rendering ────────────────────────────────────────────────────
   function statusLabel(s) {
     return { verified: "Verified", updated: "Auto-Updated", needs_review: "Needs Review", not_found: "Not Found" }[s] || s;
+  }
+
+  function selectedChoiceKind(r) {
+    if (r.selected_choice === "exclude") return "exclude";
+    if (r.selected_choice === "original") return "original";
+    if (r.selected_choice === "candidate") return `candidate:${r.selected_candidate_index}`;
+    return `candidate:${r.selected_candidate_index}`;
+  }
+
+  function candidateVenue(candidate) {
+    return candidate.journal || candidate.booktitle || "";
+  }
+
+  function candidateChoiceHTML(r) {
+    const choices = r.candidate_choices || [];
+    if (choices.length < 2) return "";
+
+    const selected = selectedChoiceKind(r);
+    const rows = choices.map((candidate, index) => {
+      const key = `candidate:${index}`;
+      const title = candidate.title || "(untitled candidate)";
+      const venue = candidateVenue(candidate);
+      const meta = [candidate.year, venue, candidate._source].filter(Boolean).join(" · ");
+      const doi = candidate.doi ? `<span class="candidate-doi">${esc(candidate.doi)}</span>` : "";
+      const openUrl = candidate._paperUrl || B.paperUrlForEntry(candidate);
+      const openLink = openUrl
+        ? `<a class="candidate-open-link" href="${esc(openUrl)}" target="_blank" rel="noopener" title="Open paper page">Open paper</a>`
+        : "";
+      const score = Math.round(B.candidateScore(candidate, parsedEntries[r.index] || {}, { preferPublished: true }));
+      return `<div class="candidate-option ${selected === key ? "active" : ""}">
+        <button class="candidate-option-btn" type="button" data-entry="${r.index}" data-choice-action="candidate" data-candidate-index="${index}">
+          <span class="candidate-rank">${index + 1}</span>
+          <span class="candidate-main">
+            <span class="candidate-title">${esc(title)}</span>
+            <span class="candidate-meta">${esc(meta)}${doi}</span>
+          </span>
+          <span class="candidate-score">${Number.isFinite(score) ? esc(String(score)) : ""}</span>
+        </button>
+        ${openLink}
+      </div>`;
+    }).join("");
+
+    const originalActive = selected === "original";
+    const excludeActive = selected === "exclude";
+    return `<div class="candidate-panel">
+      <div class="candidate-panel-head">
+        <span>Candidate choices</span>
+        <span>${choices.length} found · reranked locally</span>
+      </div>
+      <div class="candidate-options">${rows}</div>
+      <div class="candidate-control-row">
+        <button class="candidate-control-btn ${originalActive ? "active" : ""}" type="button" data-entry="${r.index}" data-choice-action="original">Keep original</button>
+        <button class="candidate-control-btn danger ${excludeActive ? "active" : ""}" type="button" data-entry="${r.index}" data-choice-action="exclude">Exclude from export</button>
+      </div>
+    </div>`;
   }
 
   function cardMatchesFilter(card) {
@@ -554,6 +624,7 @@
   function renderEntryCard(r) {
     const card = document.createElement("div");
     card.className = `entry-card status-${r.status}`;
+    card.classList.toggle("is-excluded", r.selected_choice === "exclude");
     card.dataset.status = r.status;
     card.dataset.index = r.index;
     if (r.duplicate_of) card.dataset.duplicate = "true";
@@ -577,7 +648,11 @@
         // Enrichments (original empty) should default to "found" so the suggested
         // value is reflected in the preview without requiring a click. For real
         // diffs, "updated" status auto-adopts; verified/needs_review keeps original.
-        const defaultAction = (isEnrichment || r.status === "updated") ? "found" : "original";
+        const defaultAction = r.selected_choice === "candidate"
+          ? "found"
+          : r.selected_choice === "original"
+            ? "original"
+            : (isEnrichment || r.status === "updated") ? "found" : "original";
 
         if (!fieldEdits[idx][d.field]) {
           fieldEdits[idx][d.field] = {
@@ -695,6 +770,8 @@
         : "This entry has no title, so it cannot be looked up automatically. Add a title in your .bib file or verify the entry by hand."}</div>`;
     }
 
+    const candidateHTML = candidateChoiceHTML(r);
+
     let actionsHTML = "";
     const hasEditable = Object.keys(fieldEdits[idx]).length > 0;
     if (hasEditable && hasSuggestion && hasDiffs) {
@@ -717,6 +794,9 @@
       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>
     </button>`;
 
+    const paperOpenLink = r.paper_url
+      ? `<a class="paper-open-link" href="${esc(r.paper_url)}" target="_blank" rel="noopener" title="Open selected paper page">Open paper</a>`
+      : "";
     const searchQuery = encodeURIComponent(B.stripLatex(r.title || ""));
     const searchLinks = (r.title || "").trim() ? `<div class="search-links">
       <a class="search-link" href="https://scholar.google.com/scholar?q=${searchQuery}" target="_blank" rel="noopener" title="Google Scholar">
@@ -748,18 +828,90 @@
         ${jumpBtn}
         <div class="entry-tags">
           ${r.duplicate_of ? '<span class="status-tag tag-duplicate">Duplicate</span>' : ""}
-          <span class="status-tag tag-${r.status}">${statusLabel(r.status)}</span>
+          ${r.selected_choice === "exclude" ? '<span class="status-tag tag-excluded">Excluded</span>' : ""}
+          ${r.selected_choice === "exclude" ? "" : `<span class="status-tag tag-${r.status}">${statusLabel(r.status)}</span>`}
         </div>
       </div>
-    </div>${duplicateHTML}${reviewHintHTML}${notFoundHintHTML}${diffHTML}${actionsHTML}${searchLinks}`;
+    </div>${duplicateHTML}${reviewHintHTML}${notFoundHintHTML}${candidateHTML}${r.selected_choice === "exclude" ? "" : diffHTML}${r.selected_choice === "exclude" ? "" : actionsHTML}${paperOpenLink}${searchLinks}`;
 
     // Cache normalized search haystack so search filtering stays cheap.
     card.dataset.searchHay = `${(r.entry_id || "").toLowerCase()} ${B.stripLatex(r.title || "").toLowerCase()}`;
 
     applyCardVisibility(card);
-    entryList.appendChild(card);
+    const existing = entryList.querySelector(`.entry-card[data-index="${idx}"]`);
+    if (existing) existing.replaceWith(card);
+    else entryList.appendChild(card);
     updateEntryEmptyState();
   }
+
+  function statusForCandidate(entry, candidate) {
+    const cmp = B.compareEntry(entry, candidate);
+    let status = B.resolveRerankStatus(cmp.status, candidate._rerankStatus);
+    if (status !== "not_found" && B.hasCriticalMetadataConflict(entry, candidate))
+      status = "needs_review";
+    const fieldDiffs = status === "needs_review" && !cmp.field_diffs.length
+      ? B.fieldDiffsForNeedsReview(entry, candidate)
+      : cmp.field_diffs;
+    return { cmp, fieldDiffs, status };
+  }
+
+  function applyCandidateChoice(entryIndex, candidateIndex) {
+    const r = results[entryIndex];
+    const entry = parsedEntries[entryIndex];
+    const candidate = r?.candidate_choices?.[candidateIndex];
+    if (!r || !entry || !candidate) return;
+
+    const next = statusForCandidate(entry, candidate);
+    decisions[entryIndex] = { action: "candidate", candidateIndex };
+    fieldEdits[entryIndex] = {};
+    r.status = next.status;
+    r.title_score = next.cmp.title_score;
+    r.field_diffs = next.fieldDiffs;
+    r.suggested = next.cmp.suggested;
+    r.found_title = candidate.title || "";
+    r.paper_url = B.paperUrlForEntry(candidate);
+    r.selected_candidate_index = candidateIndex;
+    r.selected_choice = "candidate";
+    renderEntryCard(r);
+    updateAuthorPills();
+    updatePreview();
+  }
+
+  function applyOriginalChoice(entryIndex) {
+    const r = results[entryIndex];
+    if (!r) return;
+    decisions[entryIndex] = { action: "original" };
+    fieldEdits[entryIndex] = {};
+    r.selected_choice = "original";
+    renderEntryCard(r);
+    updateAuthorPills();
+    updatePreview();
+  }
+
+  function applyExcludeChoice(entryIndex) {
+    const r = results[entryIndex];
+    if (!r) return;
+    decisions[entryIndex] = { action: "exclude" };
+    fieldEdits[entryIndex] = {};
+    r.selected_choice = "exclude";
+    renderEntryCard(r);
+    updateAuthorPills();
+    updatePreview();
+  }
+
+  document.addEventListener("click", (e) => {
+    const btn = e.target.closest(".candidate-option-btn, .candidate-control-btn");
+    if (!btn) return;
+    const entryIndex = parseInt(btn.dataset.entry);
+    const action = btn.dataset.choiceAction;
+    if (action === "candidate") {
+      applyCandidateChoice(entryIndex, parseInt(btn.dataset.candidateIndex));
+    } else if (action === "original") {
+      applyOriginalChoice(entryIndex);
+    } else if (action === "exclude") {
+      applyExcludeChoice(entryIndex);
+    }
+  });
 
   // ─── Fields table toggle ─────────────────────────────────────────
   document.addEventListener("click", (e) => {
@@ -1303,6 +1455,7 @@
       const r = results[idx];
       if (!r) return;
       const origStatus = r.status;
+      if (card.classList.contains("is-excluded")) return;
 
       // Store original status on the card if not already saved
       if (!card.dataset.origStatus) card.dataset.origStatus = origStatus;
@@ -1327,7 +1480,7 @@
       // Update card visuals
       card.dataset.status = effectiveStatus;
       card.className = card.className.replace(/status-\S+/, `status-${effectiveStatus}`);
-      const tag = card.querySelector(".status-tag:not(.tag-duplicate)");
+      const tag = card.querySelector(".status-tag:not(.tag-duplicate):not(.tag-excluded)");
       if (tag) {
         tag.className = `status-tag tag-${effectiveStatus}`;
         tag.textContent = statusLabel(effectiveStatus);
@@ -1366,9 +1519,17 @@
     let final = parsedEntries.slice(0, count).map((entry, i) => {
       const r = results[i];
       if (!r) return { ...entry };
+      const decision = decisions[i] || {};
+      if (decision.action === "exclude") return null;
+      if (decision.action === "original") return { ...entry };
       if (s.removeNotFound && r.status === "not_found") return null;
 
-      const out = { ...entry };
+      const selectedCandidate = decision.action === "candidate"
+        ? r.candidate_choices?.[decision.candidateIndex]
+        : null;
+      const out = selectedCandidate
+        ? B.applyCandidateToEntry(entry, selectedCandidate)
+        : { ...entry };
       const edits = fieldEdits[i] || {};
       for (const [field, fe] of Object.entries(edits)) {
         if (!fe) continue;

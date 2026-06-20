@@ -431,6 +431,21 @@
     return merged;
   }
 
+  function paperUrlForEntry(entry) {
+    const doi = (entry?.doi || "").trim();
+    if (doi) return `https://doi.org/${doi}`;
+    return (entry?.url || "").trim();
+  }
+
+  function applyCandidateToEntry(original, candidate) {
+    const out = { ...original };
+    for (const [field, value] of Object.entries(candidate || {})) {
+      if (field.startsWith("_") || field === "ENTRYTYPE" || field === "ID") continue;
+      if (value) out[field] = value;
+    }
+    return out;
+  }
+
   function isPreprintVenue(venue) {
     const v = normalizeText(venue);
     return v.includes("arxiv") || v.includes("preprint") || v.includes("corr");
@@ -673,6 +688,8 @@
   exports.extractLastNames = extractLastNames;
   exports.isSamePaper = isSamePaper;
   exports.mergeMetadata = mergeMetadata;
+  exports.paperUrlForEntry = paperUrlForEntry;
+  exports.applyCandidateToEntry = applyCandidateToEntry;
   exports.isPreprintVenue = isPreprintVenue;
   exports.dedupeCandidates = dedupeCandidates;
   exports.candidateScore = candidateScore;
