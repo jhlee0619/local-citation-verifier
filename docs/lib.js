@@ -505,6 +505,8 @@
       if (field.startsWith("_") || field === "ENTRYTYPE" || field === "ID") continue;
       if (value) out[field] = value;
     }
+    if ((out.ENTRYTYPE || "").toLowerCase() === "inproceedings" && out.booktitle)
+      delete out.journal;
     return out;
   }
 

@@ -572,6 +572,20 @@ test("applyCandidateToEntry preserves BibTeX identity and skips internal fields"
   assert.ok(!("_source" in result));
 });
 
+test("applyCandidateToEntry keeps conference exports from duplicating journal and booktitle", () => {
+  const original = { ENTRYTYPE: "inproceedings", ID: "he2022masked", booktitle: "CVPR" };
+  const candidate = {
+    booktitle: "Computer Vision and Pattern Recognition",
+    journal: "Computer Vision and Pattern Recognition",
+    doi: "10.1109/CVPR52688.2022.01553",
+  };
+  const result = lib.applyCandidateToEntry(original, candidate);
+
+  assert.strictEqual(result.booktitle, "Computer Vision and Pattern Recognition");
+  assert.strictEqual(result.doi, "10.1109/CVPR52688.2022.01553");
+  assert.ok(!("journal" in result));
+});
+
 // ═══════════════════════════════════════════════════════════════════════
 console.log("\n── bestMatch ──");
 

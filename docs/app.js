@@ -213,19 +213,35 @@
     return merged;
   }
 
+  function selectedFirstCandidateChoices(selectedCandidate, candidates, selectedIndex) {
+    const indexed = candidates.map((choice, index) => ({ choice, index }));
+    if (selectedIndex > 0 && selectedIndex < indexed.length) {
+      const [selected] = indexed.splice(selectedIndex, 1);
+      indexed.unshift(selected);
+    }
+    if (indexed.length && selectedCandidate) {
+      indexed[0] = {
+        choice: selectedCandidate,
+        index: selectedIndex >= 0 ? selectedIndex : indexed[0].index,
+      };
+    }
+    return indexed.map(({ choice, index }) => ({
+      ...choice,
+      _choiceIndex: index,
+      _paperUrl: B.paperUrlForEntry(choice),
+    }));
+  }
+
   function attachRerankDecision(candidate, aiChoice, candidates, selectedIndex) {
+    const candidateChoices = selectedFirstCandidateChoices(candidate, candidates, selectedIndex);
     return {
       ...candidate,
       _rerankStatus: aiChoice?.status || "",
       _rerankConfidence: aiChoice?.confidence ?? null,
       _rerankReason: aiChoice?.reason || "",
       _rerankRiskFlags: aiChoice?.riskFlags || [],
-      _candidateChoices: candidates.map((choice, index) => ({
-        ...choice,
-        _choiceIndex: index,
-        _paperUrl: B.paperUrlForEntry(choice),
-      })),
-      _selectedCandidateIndex: selectedIndex,
+      _candidateChoices: candidateChoices,
+      _selectedCandidateIndex: candidateChoices.length ? 0 : -1,
     };
   }
 
@@ -556,6 +572,14 @@
   }
 
   function buildResult(entry, index, status, titleScore, fieldDiffs, suggested, found) {
+    const candidateChoices = found ? (found._candidateChoices || []) : [];
+    const defaultCandidateIndex = candidateChoices.length && status !== "not_found" ? 0 : -1;
+    if (defaultCandidateIndex >= 0) {
+      decisions[index] = { action: "candidate", candidateIndex: defaultCandidateIndex };
+    } else {
+      delete decisions[index];
+    }
+
     return {
       index,
       entry_id: entry.ID || "",
@@ -569,9 +593,9 @@
       ai_status: found ? (found._rerankStatus || "") : "",
       ai_reason: found ? (found._rerankReason || "") : "",
       ai_risk_flags: found ? (found._rerankRiskFlags || []) : [],
-      candidate_choices: found ? (found._candidateChoices || []) : [],
-      selected_candidate_index: found ? (found._selectedCandidateIndex ?? -1) : -1,
-      selected_choice: "auto",
+      candidate_choices: candidateChoices,
+      selected_candidate_index: defaultCandidateIndex,
+      selected_choice: defaultCandidateIndex >= 0 ? "candidate" : "auto",
       paper_url: found ? B.paperUrlForEntry(found) : B.paperUrlForEntry(entry),
       duplicate_of: entry._duplicateOf || null,
     };
@@ -1616,6 +1640,8 @@
           }
         }
       }
+      if ((out.ENTRYTYPE || "").toLowerCase() === "inproceedings" && out.booktitle)
+        delete out.journal;
       return out;
     }).filter(Boolean);
 
