@@ -24,13 +24,15 @@ Online:
 
 `https://jhlee0619.github.io/local-citation-verifier/`
 
-Local:
+Local static app:
 
 ```bash
 git clone https://github.com/jhlee0619/local-citation-verifier.git
 cd local-citation-verifier
-npx serve docs
+npx serve docs -l 18088
 ```
+
+Open `http://127.0.0.1:18088/`. In this mode, WebGPU rerank runs in your browser on your local GPU when supported.
 
 Server with vLLM:
 
@@ -46,7 +48,13 @@ vllm serve google/gemma-4-E2B-it --host 127.0.0.1 --port 8000 --max-model-len 81
 PORT=8088 VLLM_BASE_URL=http://127.0.0.1:8000 python3 server/vllm_proxy_server.py
 ```
 
-Then open `http://<server-host>:8088/` and choose `vLLM server` in the rerank engine menu. When the proxy health check succeeds, the app selects vLLM automatically.
+Then open one of these addresses and choose `vLLM server` in the rerank engine menu:
+
+- Same machine as the proxy: `http://127.0.0.1:8088/`
+- LAN access: `http://<server-host>:8088/`
+- SSH tunnel from your laptop: `ssh -L 18088:127.0.0.1:8088 aicon_spark`, then open `http://127.0.0.1:18088/`
+
+When the proxy health check succeeds, the app selects vLLM automatically. In this mode, rerank inference runs on the server GPU, while the UI still runs in your browser.
 
 ## Workflow
 
@@ -56,6 +64,10 @@ Then open `http://<server-host>:8088/` and choose `vLLM server` in the rerank en
 4. Candidate records are deduplicated and ranked.
 5. WebGPU Gemma or server-side vLLM reranks ambiguous candidate sets when enabled.
 6. You review field-level differences and export a corrected `.bib`.
+
+## Rerank Guardrails
+
+Ambiguous matches are limited to the top three candidates before LLM reranking. The model must return strict JSON with one of `verified`, `updated`, `needs_review`, or `not_found`, plus a fixed risk flag vocabulary. Any risky `updated` or `verified` answer is escalated to `needs_review` before export.
 
 ## Result States
 
