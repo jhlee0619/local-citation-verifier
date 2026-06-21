@@ -379,7 +379,7 @@ code {
   display: inline-flex;
   gap: 6px;
   padding: 6px;
-  margin: 0 0 18px;
+  margin: 0;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--surface-alt);
@@ -402,9 +402,21 @@ code {
   box-shadow: 0 1px 8px rgba(0, 0, 0, 0.18);
 }
 
+.command-surface > .tool-switch {
+  grid-area: tools;
+  justify-self: start;
+  align-self: end;
+}
+
 .citation-audit-panel[hidden],
 [data-tool-view][hidden] {
   display: none !important;
+}
+
+.citation-audit-panel {
+  grid-area: import;
+  margin: 0;
+  min-height: 680px;
 }
 
 .citation-input-grid {
@@ -486,6 +498,9 @@ code {
   display: grid;
   gap: 12px;
   margin-top: 16px;
+  max-height: 520px;
+  overflow: auto;
+  padding-right: 4px;
 }
 
 .citation-card {
@@ -563,6 +578,12 @@ code {
 }
 
 @media (max-width: 820px) {
+  .page-wrap,
+  .command-surface,
+  .workspace-shell {
+    max-width: 100%;
+  }
+
   .citation-input-grid,
   .citation-summary {
     grid-template-columns: 1fr;
@@ -3332,7 +3353,9 @@ body {
 .command-surface {
   display: grid;
   grid-template-columns: minmax(300px, 0.72fr) minmax(520px, 1fr);
-  grid-template-areas: "mission import";
+  grid-template-areas:
+    "tools tools"
+    "mission import";
   gap: 1rem;
   align-items: stretch;
   margin-bottom: 1rem;
@@ -3369,6 +3392,10 @@ body {
   flex-direction: column;
   margin: 0;
   min-height: 680px;
+}
+
+.workspace-shell.citation-audit-panel {
+  margin: 0;
 }
 
 .import-panel .workspace-header {
@@ -3418,11 +3445,13 @@ body {
   .command-surface {
     grid-template-columns: 1fr;
     grid-template-areas:
+      "tools"
       "mission"
       "import";
   }
 
-  .import-panel {
+  .import-panel,
+  .citation-audit-panel {
     min-height: auto;
   }
 }
