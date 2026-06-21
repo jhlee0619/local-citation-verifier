@@ -238,6 +238,38 @@
     return (inter / Math.max(sa.size, sb.size)) * 100;
   }
 
+  function authorParts(authorStr) {
+    return String(authorStr || "")
+      .split(/\s+and\s+/i)
+      .map(part => part.trim())
+      .filter(Boolean);
+  }
+
+  function hasTruncatedAuthorMarker(authorStr) {
+    return /(^|\s+and\s+)(others|et\s+al\.?)\b|\.\.\./i.test(String(authorStr || ""));
+  }
+
+  function firstAuthorLastName(authorStr) {
+    const first = authorParts(authorStr)[0] || "";
+    const cleaned = stripLatex(first).replace(/[{}]/g, "").trim();
+    if (!cleaned) return "";
+    if (cleaned.includes(",")) return normalizeText(cleaned.split(",")[0]);
+    const parts = cleaned.split(/\s+/).filter(Boolean);
+    return normalizeText(parts[parts.length - 1] || "");
+  }
+
+  function shouldSuppressAuthorSuggestion(originalAuthor, foundAuthor) {
+    const originalParts = authorParts(originalAuthor);
+    const foundParts = authorParts(foundAuthor);
+    if (!originalParts.length || !foundParts.length) return false;
+    if (hasTruncatedAuthorMarker(originalAuthor) || hasTruncatedAuthorMarker(foundAuthor)) {
+      const originalFirst = firstAuthorLastName(originalAuthor);
+      const foundFirst = firstAuthorLastName(foundAuthor);
+      return !originalFirst || !foundFirst || originalFirst === foundFirst;
+    }
+    return foundParts.length >= 30 && originalParts.length <= 6;
+  }
+
   function compareField(field, a, b) {
     const na = normalizeText(a), nb = normalizeText(b);
     if (!na && !nb) return 100;
@@ -277,6 +309,8 @@
 
       const score = compareField(field, origVal, foundVal);
       if (score < 100) {
+        if (field === "author" && shouldSuppressAuthorSuggestion(origVal, foundVal))
+          continue;
         hasDifference = true;
         fieldDiffs.push({ field, original: origVal, found: foundVal, score: Math.round(score * 10) / 10 });
       }
@@ -334,6 +368,8 @@
 
       const score = compareField(field, origVal, foundVal);
       if (score < 100) {
+        if (field === "author" && shouldSuppressAuthorSuggestion(origVal, foundVal))
+          continue;
         fieldDiffs.push({
           field,
           original: origVal,
@@ -392,8 +428,12 @@
       volume: "", number: "", pages: "",
       doi: ext.DOI || "",
       publisher: "",
-      url: ext.DOI ? `https://doi.org/${ext.DOI}` : "",
+      url: ext.DOI ? `https://doi.org/${ext.DOI}` : (ext.ArXiv ? `https://arxiv.org/abs/${ext.ArXiv}` : ""),
+      eprint: ext.ArXiv || "",
+      archiveprefix: ext.ArXiv ? "arXiv" : "",
       _source: "semantic_scholar",
+      _externalIds: ext,
+      _arxivId: ext.ArXiv || "",
     };
   }
 
@@ -434,6 +474,10 @@
   function paperUrlForEntry(entry) {
     const doi = (entry?.doi || "").trim();
     if (doi) return `https://doi.org/${doi}`;
+    const arxivId = (entry?._arxivId || entry?.eprint || "").trim();
+    const archive = (entry?.archiveprefix || entry?.archivePrefix || "").trim().toLowerCase();
+    if (arxivId && (archive === "arxiv" || entry?._arxivId))
+      return `https://arxiv.org/abs/${arxivId}`;
     return (entry?.url || "").trim();
   }
 
@@ -457,18 +501,36 @@
     const title = normalizeTitle(candidate.title || "");
     const venue = normalizeText(candidate.journal || candidate.booktitle || "");
     if (doi) keys.push(`doi:${doi}`);
+    const arxivId = normalizeText(candidate._arxivId || candidate.eprint || "");
+    const archive = normalizeText(candidate.archiveprefix || candidate.archivePrefix || "");
+    if (arxivId && (archive === "arxiv" || candidate._arxivId)) keys.push(`arxiv:${arxivId}`);
     if (title && venue) keys.push(`title:${title}|venue:${venue}`);
     return keys;
   }
 
+  function isAuthoritativeCandidate(candidate) {
+    return (candidate?._source || "").includes("arxiv");
+  }
+
   function dedupeCandidates(candidates) {
     const seen = new Set();
+    const keyToIndex = new Map();
     const unique = [];
     for (const candidate of candidates) {
       if (!candidate) continue;
       const keys = candidateKeys(candidate);
-      if (keys.some(key => seen.has(key))) continue;
-      keys.forEach(key => seen.add(key));
+      const duplicateIndex = keys.map(key => keyToIndex.get(key)).find(index => index !== undefined);
+      if (duplicateIndex !== undefined) {
+        if (isAuthoritativeCandidate(candidate) && !isAuthoritativeCandidate(unique[duplicateIndex])) {
+          unique[duplicateIndex] = candidate;
+          keys.forEach(key => keyToIndex.set(key, duplicateIndex));
+        }
+        continue;
+      }
+      keys.forEach(key => {
+        seen.add(key);
+        keyToIndex.set(key, unique.length);
+      });
       unique.push(candidate);
     }
     return unique;
@@ -486,6 +548,7 @@
     if (original.year && candidate.year)
       score += original.year === candidate.year ? 8 : -12;
     if (candidate.doi) score += 4;
+    if ((candidate._source || "").includes("arxiv")) score += 35;
     if (candidate.pages) score += 2;
     if (candidate.volume) score += 2;
 

@@ -14,6 +14,7 @@ from vllm_proxy_server import (  # noqa: E402
     extract_chat_output,
     first_model_id,
     make_chat_payload,
+    parse_arxiv_id,
     parse_rerank_request,
 )
 
@@ -48,10 +49,26 @@ def test_first_model_id_reads_openai_models_shape() -> None:
     assert first_model_id({"data": [{"id": "gemma-local"}]}) == "gemma-local"
 
 
+def test_parse_arxiv_id_accepts_plain_and_versioned_ids() -> None:
+    assert parse_arxiv_id("2407.21783") == "2407.21783"
+    assert parse_arxiv_id("2407.21783v3") == "2407.21783"
+
+
+def test_parse_arxiv_id_rejects_invalid_values() -> None:
+    try:
+        parse_arxiv_id("https://example.com/not-arxiv")
+    except BadRequestError as exc:
+        assert "arXiv identifier" in exc.message
+    else:
+        raise AssertionError("expected BadRequestError")
+
+
 if __name__ == "__main__":
     test_parse_rerank_request_accepts_valid_payload()
     test_parse_rerank_request_rejects_missing_prompt()
     test_make_chat_payload_uses_openai_chat_shape()
     test_extract_chat_output_reads_first_choice_message()
     test_first_model_id_reads_openai_models_shape()
+    test_parse_arxiv_id_accepts_plain_and_versioned_ids()
+    test_parse_arxiv_id_rejects_invalid_values()
     print("vllm proxy tests passed")

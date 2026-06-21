@@ -313,6 +313,56 @@ test("enrichments mark entry as updated", () => {
   assert.ok(result.field_diffs.some(d => d.field === "doi"), "should report doi enrichment");
 });
 
+test("does not auto-suggest expanding truncated mega-author lists", () => {
+  const orig = {
+    title: "The Llama 3 Herd of Models",
+    author: "Abhimanyu Dubey and Abhinav Jauhri and Abhinav Pandey and others",
+    year: "2024",
+  };
+  const found = {
+    title: "The Llama 3 Herd of Models",
+    author: [
+      "Dubey, Abhimanyu",
+      "Jauhri, Abhinav",
+      "Pandey, Abhinav",
+      "Kadian, Abhishek",
+      "Al-Dahle, Ahmad",
+      "Letman, Aiesha",
+      "Mathur, Akhil",
+    ].join(" and "),
+    year: "2024",
+    _source: "semantic_scholar",
+  };
+  const result = lib.compareEntry(orig, found);
+  assert.ok(!result.field_diffs.some(d => d.field === "author"));
+  assert.strictEqual(result.suggested.author, undefined);
+});
+
+test("still suggests normal author mismatches", () => {
+  const orig = { title: "Short Paper", author: "Smith, Alice", year: "2024" };
+  const found = { title: "Short Paper", author: "Doe, Jane", year: "2024" };
+  const result = lib.compareEntry(orig, found);
+  assert.ok(result.field_diffs.some(d => d.field === "author"));
+  assert.strictEqual(result.suggested.author, "Doe, Jane");
+});
+
+test("allows first-author corrections even when original uses others", () => {
+  const orig = {
+    title: "The Llama 3 Herd of Models",
+    author: "Abhimanyu Dubey and Abhinav Jauhri and Abhinav Pandey and others",
+    year: "2024",
+  };
+  const found = {
+    title: "The Llama 3 Herd of Models",
+    author: "Aaron Grattafiori and Abhimanyu Dubey and Abhinav Jauhri and Abhinav Pandey and others",
+    year: "2024",
+    _source: "arxiv",
+  };
+  const result = lib.compareEntry(orig, found);
+  assert.ok(result.field_diffs.some(d => d.field === "author"));
+  assert.strictEqual(result.suggested.author, found.author);
+});
+
 // ═══════════════════════════════════════════════════════════════════════
 console.log("\n── fieldDiffsForNeedsReview ──");
 
@@ -391,6 +441,20 @@ test("converts Semantic Scholar response to standard format", () => {
   assert.strictEqual(result.year, "2019");
   assert.strictEqual(result.journal, "NAACL");
   assert.strictEqual(result._source, "semantic_scholar");
+});
+
+test("preserves Semantic Scholar arXiv identifiers for local arXiv enrichment", () => {
+  const result = lib.ssToStandard({
+    title: "The Llama 3 Herd of Models",
+    authors: [{ name: "Abhimanyu Dubey" }],
+    year: 2024,
+    venue: "arXiv",
+    externalIds: { ArXiv: "2407.21783" },
+  });
+  assert.strictEqual(result.eprint, "2407.21783");
+  assert.strictEqual(result.archiveprefix, "arXiv");
+  assert.strictEqual(result._arxivId, "2407.21783");
+  assert.strictEqual(lib.paperUrlForEntry(result), "https://arxiv.org/abs/2407.21783");
 });
 
 test("prefers publicationVenue.name over venue string", () => {
@@ -554,6 +618,31 @@ test("prefers a published version over an arXiv/preprint candidate when title an
   assert.strictEqual(result.bestIndex, 1);
 });
 
+test("prefers local arXiv metadata over Semantic Scholar author ordering for arXiv records", () => {
+  const original = {
+    title: "The Llama 3 Herd of Models",
+    author: "Abhimanyu Dubey and Abhinav Jauhri and Abhinav Pandey and others",
+    year: "2024",
+  };
+  const semanticScholar = {
+    title: "The Llama 3 Herd of Models",
+    author: "Abhimanyu Dubey and Abhinav Jauhri and Abhinav Pandey and Abhishek Kadian",
+    year: "2024",
+    journal: "arXiv",
+    _source: "semantic_scholar",
+    _arxivId: "2407.21783",
+  };
+  const arxiv = {
+    title: "The Llama 3 Herd of Models",
+    author: "Aaron Grattafiori and Abhimanyu Dubey and Abhinav Jauhri and Abhinav Pandey and Abhishek Kadian",
+    year: "2024",
+    journal: "arXiv",
+    _source: "arxiv",
+    _arxivId: "2407.21783",
+  };
+  const result = lib.rerankCandidates([semanticScholar, arxiv], original, { preferPublished: true });
+  assert.strictEqual(result.best, arxiv);
+});
 
 test("limits candidate choices to the highest scoring matches", () => {
   const original = { title: "Attention Is All You Need", author: "Vaswani, Ashish", year: "2017" };

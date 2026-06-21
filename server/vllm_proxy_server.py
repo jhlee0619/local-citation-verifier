@@ -6,11 +6,13 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Final, TypeAlias
+from urllib.parse import parse_qs, urlparse
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -23,6 +25,7 @@ DEFAULT_VLLM_BASE_URL: Final = "http://127.0.0.1:8000"
 MAX_BODY_BYTES: Final = 64 * 1024
 MAX_PROMPT_CHARS: Final = 24_000
 MAX_CANDIDATES: Final = 50
+ARXIV_ID_RE: Final = re.compile(r"^\d{4}\.\d{4,5}(?:v\d+)?$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,6 +115,29 @@ def get_json(url: str, timeout_seconds: float) -> JsonObject:
         raise UpstreamError("vLLM request timed out") from exc
 
 
+def parse_arxiv_id(value: str | None) -> str:
+    arxiv_id = (value or "").strip()
+    if not ARXIV_ID_RE.fullmatch(arxiv_id):
+        raise BadRequestError("id must be an arXiv identifier like 2407.21783")
+    return re.sub(r"v\d+$", "", arxiv_id)
+
+
+def fetch_arxiv_bibtex(arxiv_id: str, timeout_seconds: float) -> str:
+    request = Request(
+        f"https://arxiv.org/bibtex/{arxiv_id}",
+        headers={"User-Agent": "local-citation-verifier/1.0"},
+    )
+    try:
+        with urlopen(request, timeout=timeout_seconds) as response:
+            return response.read().decode("utf-8")
+    except HTTPError as exc:
+        raise UpstreamError(f"arXiv returned HTTP {exc.code}") from exc
+    except URLError as exc:
+        raise UpstreamError(f"arXiv is unreachable: {exc.reason}") from exc
+    except TimeoutError as exc:
+        raise UpstreamError("arXiv request timed out") from exc
+
+
 def first_model_id(models: JsonObject) -> str | None:
     data = models.get("data")
     if not isinstance(data, list) or not data:
@@ -158,6 +184,9 @@ class CitationRequestHandler(SimpleHTTPRequestHandler):
         if self.path == "/api/rerank/vllm/health":
             self.handle_health()
             return
+        if self.path.startswith("/api/arxiv/bibtex"):
+            self.handle_arxiv_bibtex()
+            return
         super().do_GET()
 
     def do_POST(self) -> None:
@@ -172,6 +201,17 @@ class CitationRequestHandler(SimpleHTTPRequestHandler):
             self.write_json(HTTPStatus.OK, {"ready": True, "model": model})
         except UpstreamError as exc:
             self.write_json(HTTPStatus.SERVICE_UNAVAILABLE, {"ready": False, "error": exc.message})
+
+    def handle_arxiv_bibtex(self) -> None:
+        try:
+            query = parse_qs(urlparse(self.path).query)
+            arxiv_id = parse_arxiv_id(query.get("id", [""])[0])
+            bibtex = fetch_arxiv_bibtex(arxiv_id, timeout_seconds=8.0)
+            self.write_json(HTTPStatus.OK, {"id": arxiv_id, "bibtex": bibtex})
+        except BadRequestError as exc:
+            self.write_json(HTTPStatus.BAD_REQUEST, {"error": exc.message})
+        except UpstreamError as exc:
+            self.write_json(HTTPStatus.BAD_GATEWAY, {"error": exc.message})
 
     def handle_rerank(self) -> None:
         try:

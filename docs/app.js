@@ -8,6 +8,7 @@
   const SS_MATCH = "https://api.semanticscholar.org/graph/v1/paper/search/match";
   const SS_SEARCH = "https://api.semanticscholar.org/graph/v1/paper/search";
   const SS_FIELDS = "title,authors,year,venue,publicationVenue,externalIds";
+  const LOCAL_ARXIV_BIBTEX = "/api/arxiv/bibtex";
   const MAX_RETRIES = 4;
   const RETRY_BASE_MS = 1500;
   const MAX_CANDIDATE_CHOICES = 3;
@@ -118,6 +119,63 @@
     return (data?.message?.items || []).map(B.crossrefToStandard);
   }
 
+  function normalizeArxivId(value) {
+    const raw = String(value || "").trim();
+    const match = /(?:arxiv:|arxiv\.org\/abs\/)?(\d{4}\.\d{4,5})(?:v\d+)?/i.exec(raw);
+    return match ? match[1] : "";
+  }
+
+  function extractArxivId(entry) {
+    if (!entry) return "";
+    return normalizeArxivId(entry._arxivId || entry.eprint || entry.url || "");
+  }
+
+  function bibEntryToArxivCandidate(entry, arxivId) {
+    return {
+      title: entry.title || "",
+      author: entry.author || "",
+      year: entry.year || "",
+      journal: entry.journal || entry.booktitle || "arXiv",
+      volume: entry.volume || "",
+      number: entry.number || "",
+      pages: entry.pages || "",
+      doi: entry.doi || "",
+      publisher: entry.publisher || "",
+      url: entry.url || `https://arxiv.org/abs/${arxivId}`,
+      eprint: entry.eprint || arxivId,
+      archiveprefix: entry.archiveprefix || "arXiv",
+      _source: "arxiv",
+      _arxivId: arxivId,
+    };
+  }
+
+  async function fetchLocalArxivCandidate(arxivId) {
+    const id = normalizeArxivId(arxivId);
+    if (!id) return null;
+    try {
+      const u = new URL(LOCAL_ARXIV_BIBTEX, window.location.origin);
+      u.searchParams.set("id", id);
+      const resp = await fetch(u.toString());
+      if (!resp.ok) return null;
+      const data = await resp.json();
+      if (!data?.bibtex) return null;
+      const entry = B.parseBib(data.bibtex)[0];
+      if (!entry?.title) return null;
+      return bibEntryToArxivCandidate(entry, id);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  async function addLocalArxivCandidates(candidates, original) {
+    const ids = new Set([extractArxivId(original)]);
+    candidates.forEach(candidate => ids.add(extractArxivId(candidate)));
+    const arxivIds = [...ids].filter(Boolean);
+    if (!arxivIds.length) return candidates;
+    const arxivCandidates = await Promise.all(arxivIds.map(fetchLocalArxivCandidate));
+    return B.dedupeCandidates(arxivCandidates.filter(Boolean).concat(candidates));
+  }
+
   async function lookupPaperFast(title) {
     const ssMatch = await searchSSMatch(title);
     if (ssMatch && B.titleSimilarity(title, ssMatch.title || "") >= B.MIN_TITLE_SIM) {
@@ -136,7 +194,7 @@
     return B.bestMatch(ssCandidates, title);
   }
 
-  async function searchCandidatePool(title) {
+  async function searchCandidatePool(title, original) {
     const candidates = [];
     const ssMatch = await searchSSMatch(title);
     if (ssMatch) candidates.push(ssMatch);
@@ -147,7 +205,7 @@
     ]);
     candidates.push(...crCandidates, ...ssCandidates);
 
-    return B.dedupeCandidates(candidates);
+    return addLocalArxivCandidates(B.dedupeCandidates(candidates), original);
   }
 
   function mergeSamePaperMetadata(primary, candidates) {
@@ -177,7 +235,7 @@
   }
 
   async function lookupPaperWithRerank(title, original) {
-    const candidates = await searchCandidatePool(title);
+    const candidates = await searchCandidatePool(title, original);
     const preferPublished = optPreferPublished?.checked !== false;
     const candidateChoices = B.topCandidates(candidates, original, {
       preferPublished,
