@@ -544,6 +544,15 @@ test("paperUrlForEntry falls back to URL when DOI is missing", () => {
   assert.strictEqual(lib.paperUrlForEntry(entry), "https://example.test/paper");
 });
 
+test("extracts arXiv identifiers from entry URLs", () => {
+  const entry = {
+    title: "The Llama 3 Herd of Models",
+    url: "https://arxiv.org/abs/2407.21783",
+  };
+  assert.strictEqual(lib.extractArxivId(entry), "2407.21783");
+  assert.strictEqual(lib.paperUrlForEntry(entry), "https://arxiv.org/abs/2407.21783");
+});
+
 test("applyCandidateToEntry preserves BibTeX identity and skips internal fields", () => {
   const original = { ENTRYTYPE: "article", ID: "smith2024", title: "Draft", note: "keep" };
   const candidate = {

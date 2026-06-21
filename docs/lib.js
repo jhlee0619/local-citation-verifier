@@ -471,10 +471,28 @@
     return merged;
   }
 
+  function normalizeArxivId(value) {
+    const raw = String(value || "").trim();
+    const match = /(?:arxiv:|arxiv\.org\/abs\/)?(\d{4}\.\d{4,5})(?:v\d+)?/i.exec(raw);
+    return match ? match[1] : "";
+  }
+
+  function extractArxivId(entry) {
+    if (!entry) return "";
+    return normalizeArxivId(
+      entry._arxivId ||
+      entry.eprint ||
+      entry.arxivid ||
+      entry.url ||
+      entry.note ||
+      ""
+    );
+  }
+
   function paperUrlForEntry(entry) {
     const doi = (entry?.doi || "").trim();
     if (doi) return `https://doi.org/${doi}`;
-    const arxivId = (entry?._arxivId || entry?.eprint || "").trim();
+    const arxivId = extractArxivId(entry);
     const archive = (entry?.archiveprefix || entry?.archivePrefix || "").trim().toLowerCase();
     if (arxivId && (archive === "arxiv" || entry?._arxivId))
       return `https://arxiv.org/abs/${arxivId}`;
@@ -766,6 +784,8 @@
   exports.extractLastNames = extractLastNames;
   exports.isSamePaper = isSamePaper;
   exports.mergeMetadata = mergeMetadata;
+  exports.normalizeArxivId = normalizeArxivId;
+  exports.extractArxivId = extractArxivId;
   exports.paperUrlForEntry = paperUrlForEntry;
   exports.applyCandidateToEntry = applyCandidateToEntry;
   exports.isPreprintVenue = isPreprintVenue;
