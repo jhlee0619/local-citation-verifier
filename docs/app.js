@@ -613,13 +613,28 @@
     return `candidate:${r.selected_candidate_index}`;
   }
 
+  function selectedCandidateForResult(r) {
+    if (!r || r.selected_choice !== "candidate") return null;
+    return r.candidate_choices?.[r.selected_candidate_index] || null;
+  }
+
+  function isInternalBibField(field) {
+    return field.startsWith("_") || field === "ENTRYTYPE" || field === "ID";
+  }
+
+  function isRedundantConferenceJournal(entry, candidate, field) {
+    return field === "journal" &&
+      (entry.ENTRYTYPE || "").toLowerCase() === "inproceedings" &&
+      !!(entry.booktitle || candidate?.booktitle);
+  }
+
   function candidateVenue(candidate) {
     return candidate.journal || candidate.booktitle || "";
   }
 
   function candidateChoiceHTML(r) {
     const choices = r.candidate_choices || [];
-    if (choices.length < 2) return "";
+    if (choices.length < 1) return "";
 
     const selected = selectedChoiceKind(r);
     const rows = choices.map((candidate, index) => {
@@ -716,7 +731,10 @@
     const entry = parsedEntries[idx];
 
     let diffHTML = "";
-    const hasDiffs = r.field_diffs?.length > 0;
+    const selectedCandidate = selectedCandidateForResult(r);
+    const visibleFieldDiffs = (r.field_diffs || [])
+      .filter(d => !isRedundantConferenceJournal(entry, selectedCandidate, d.field));
+    const hasDiffs = visibleFieldDiffs.length > 0;
     /* Show Suggested column whenever status implies adoptable API/enrichment diffs (includes
        verified+enrichments-only from compareEntry, not only updated/needs_review). */
     const hasSuggestion =
@@ -725,7 +743,7 @@
       (r.status === "verified" && hasDiffs);
 
     if (hasDiffs) {
-      const rows = r.field_diffs.map(d => {
+      const rows = visibleFieldDiffs.map(d => {
         const isEnrichment = !(d.original || "").trim();
         // Enrichments (original empty) should default to "found" so the suggested
         // value is reflected in the preview without requiring a click. For real
@@ -786,15 +804,29 @@
       </table>`;
     }
 
-    const EDITABLE_FIELDS = ["title", ...B.COMPARED_FIELDS];
-    const diffFieldsSet = new Set((r.field_diffs || []).map(d => d.field));
-    const extraFields = EDITABLE_FIELDS.filter(f => !diffFieldsSet.has(f) && (entry[f] || "").trim());
+    const candidateFields = selectedCandidate
+      ? Object.keys(selectedCandidate).filter(f => !isInternalBibField(f))
+      : [];
+    const EDITABLE_FIELDS = Array.from(new Set(["title", ...B.COMPARED_FIELDS, "url", "eprint", "archiveprefix", "archivePrefix", "primaryclass", "primaryClass", ...candidateFields]));
+    const diffFieldsSet = new Set(visibleFieldDiffs.map(d => d.field));
+    const extraFields = EDITABLE_FIELDS.filter(f => {
+      if (diffFieldsSet.has(f)) return false;
+      if (isRedundantConferenceJournal(entry, selectedCandidate, f)) return false;
+      const originalValue = entry[f] || "";
+      const candidateValue = selectedCandidate?.[f] || "";
+      return !!(originalValue || candidateValue).trim();
+    });
 
     if (extraFields.length) {
       const extraRows = extraFields.map(f => {
         const val = entry[f] || "";
+        const candidateVal = selectedCandidate?.[f] || "";
+        const useCandidateValue = r.selected_choice === "candidate" && !!candidateVal.trim();
         if (!fieldEdits[idx][f]) {
-          fieldEdits[idx][f] = { action: "original", value: val };
+          fieldEdits[idx][f] = {
+            action: useCandidateValue ? "found" : "original",
+            value: useCandidateValue ? candidateVal : val,
+          };
         }
         const fe = fieldEdits[idx][f];
         const currentAction = fe.action;
@@ -1617,6 +1649,9 @@
         if (!fe) continue;
         if (fe.action === "found" || fe.action === "custom") {
           if (fe.value) out[field] = fe.value;
+        } else if (fe.action === "original") {
+          if ((entry[field] || "").trim()) out[field] = entry[field];
+          else delete out[field];
         } else if (fe.action === "remove") {
           delete out[field];
         }
