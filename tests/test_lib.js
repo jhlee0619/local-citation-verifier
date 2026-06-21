@@ -653,6 +653,38 @@ test("prefers local arXiv metadata over Semantic Scholar author ordering for arX
   assert.strictEqual(result.best, arxiv);
 });
 
+test("prefers a published CVPR candidate over arXiv when the original is in proceedings", () => {
+  const original = {
+    title: "Masked Autoencoders Are Scalable Vision Learners",
+    author: "Kaiming He and Xinlei Chen and Saining Xie and Yanghao Li and Piotr Doll'ar and Ross B. Girshick",
+    year: "2021",
+    booktitle: "Proceedings of the IEEE/CVF conference on computer vision and pattern recognition",
+    url: "https://arxiv.org/abs/2111.06377",
+  };
+  const arxiv = {
+    title: "Masked Autoencoders Are Scalable Vision Learners",
+    author: "He, Kaiming and Chen, Xinlei and Xie, Saining and Li, Yanghao and Dollár, Piotr and Girshick, Ross B.",
+    year: "2021",
+    journal: "arXiv",
+    _source: "arxiv",
+    _arxivId: "2111.06377",
+  };
+  const cvpr = {
+    title: "Masked Autoencoders Are Scalable Vision Learners",
+    author: "He, Kaiming and Chen, Xinlei and Xie, Saining and Li, Yanghao and Dollár, Piotr and Girshick, Ross B.",
+    year: "2022",
+    booktitle: "Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition",
+    pages: "16000--16009",
+    _source: "semantic_scholar",
+    _arxivId: "2111.06377",
+  };
+  const unique = lib.dedupeCandidates([arxiv, cvpr]);
+  const result = lib.rerankCandidates(unique, original, { preferPublished: true });
+  assert.strictEqual(unique.length, 1);
+  assert.strictEqual(unique[0], cvpr);
+  assert.strictEqual(result.best, cvpr);
+});
+
 test("limits candidate choices to the highest scoring matches", () => {
   const original = { title: "Attention Is All You Need", author: "Vaswani, Ashish", year: "2017" };
   const candidates = [

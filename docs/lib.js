@@ -530,6 +530,23 @@
     return (candidate?._source || "").includes("arxiv");
   }
 
+  function candidateVenue(candidate) {
+    return candidate?.journal || candidate?.booktitle || "";
+  }
+
+  function isPublishedCandidate(candidate) {
+    const venue = candidateVenue(candidate);
+    return !!venue && !isPreprintVenue(venue);
+  }
+
+  function shouldReplaceDuplicate(existing, candidate) {
+    if (isPublishedCandidate(candidate) && !isPublishedCandidate(existing))
+      return true;
+    return isAuthoritativeCandidate(candidate) &&
+      isPreprintVenue(candidateVenue(existing)) &&
+      !isAuthoritativeCandidate(existing);
+  }
+
   function dedupeCandidates(candidates) {
     const seen = new Set();
     const keyToIndex = new Map();
@@ -539,7 +556,7 @@
       const keys = candidateKeys(candidate);
       const duplicateIndex = keys.map(key => keyToIndex.get(key)).find(index => index !== undefined);
       if (duplicateIndex !== undefined) {
-        if (isAuthoritativeCandidate(candidate) && !isAuthoritativeCandidate(unique[duplicateIndex])) {
+        if (shouldReplaceDuplicate(unique[duplicateIndex], candidate)) {
           unique[duplicateIndex] = candidate;
           keys.forEach(key => keyToIndex.set(key, duplicateIndex));
         }
@@ -566,11 +583,13 @@
     if (original.year && candidate.year)
       score += original.year === candidate.year ? 8 : -12;
     if (candidate.doi) score += 4;
-    if ((candidate._source || "").includes("arxiv")) score += 35;
+    const originalVenue = original.journal || original.booktitle || "";
+    if ((candidate._source || "").includes("arxiv") && (!originalVenue || isPreprintVenue(originalVenue)))
+      score += 35;
     if (candidate.pages) score += 2;
     if (candidate.volume) score += 2;
 
-    const venue = candidate.journal || candidate.booktitle || "";
+    const venue = candidateVenue(candidate);
     if (options.preferPublished && venue)
       score += isPreprintVenue(venue) ? -10 : 10;
 
