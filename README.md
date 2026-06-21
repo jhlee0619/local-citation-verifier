@@ -4,11 +4,11 @@ An in-browser citation QA desk for BibTeX files.
 
 [Open the app](https://jhlee0619.github.io/local-citation-verifier/) · [Source](https://github.com/jhlee0619/local-citation-verifier) · MIT
 
-Local Citation Verifier checks bibliography entries against CrossRef and Semantic Scholar, highlights suspicious metadata, and can rerank ambiguous preprint vs. journal or conference matches with either browser WebGPU or a local vLLM server.
+Local Citation Verifier checks bibliography entries against CrossRef and Semantic Scholar, highlights suspicious metadata, and can rerank ambiguous preprint vs. journal or conference matches with either browser WebGPU or a local vLLM server. It also includes a same-level citation support audit for checking whether cited manuscript sentences are supported by the referenced papers.
 
 ## What Makes This Fork Different
 
-This project keeps the original BibTeX verification workflow, then adds a local reranking pass for cases where academic search returns multiple near-identical records.
+This project keeps the original BibTeX verification workflow, then adds local LLM passes for cases where academic search returns multiple near-identical records and for manuscript sentences that need citation support review.
 
 The reranker loads Gemma WebGPU code from Hugging Face in the visitor's browser:
 
@@ -58,12 +58,29 @@ When the proxy health check succeeds, the app selects vLLM automatically. In thi
 
 ## Workflow
 
-1. Upload a `.bib` file or paste BibTeX from Overleaf.
-2. The browser parses entries locally.
-3. Titles are queried against Semantic Scholar and CrossRef.
-4. Candidate records are deduplicated and ranked.
-5. WebGPU Gemma or server-side vLLM reranks ambiguous candidate sets when enabled.
-6. You review field-level differences and export a corrected `.bib`.
+1. Choose `Bibliography verifier` or `Citation support audit`.
+2. Upload a `.bib` file or paste BibTeX from Overleaf.
+3. The browser parses entries locally.
+4. Titles are queried against Semantic Scholar and CrossRef.
+5. Candidate records are deduplicated and ranked.
+6. WebGPU Gemma or server-side vLLM reranks ambiguous candidate sets when enabled.
+7. You review field-level differences and export a corrected `.bib`.
+
+## Citation Support Audit
+
+The `Citation support audit` workbench is separate from the bibliography verifier. Paste or upload:
+
+- a `.bib` file,
+- manuscript text, Markdown, or LaTeX containing citation commands such as `\cite{key}`, `\citep{key}`, or `\citet{key}`.
+
+For each cited sentence, the app maps the citation key to the BibTeX entry, fetches Semantic Scholar abstract/TLDR evidence by DOI or title, then asks the local LLM to classify the citation as:
+
+- `Supported` - the cited paper directly supports the sentence,
+- `Weak` - the paper is related but only broadly supports the claim,
+- `Unsupported` - the evidence appears unrelated, contradictory, or much weaker than the sentence,
+- `Insufficient evidence` - no abstract/TLDR or enough evidence was available.
+
+On GitHub Pages the judgement runs in the visitor's WebGPU-capable browser. On the local vLLM server, choose `Auto` or `vLLM server GPU` so judgement prompts run on the server GPU through `server/vllm_proxy_server.py`.
 
 ## Rerank Guardrails
 
@@ -97,7 +114,8 @@ Network activity is limited to:
 | `docs/` | Static GitHub Pages app |
 | `docs/app.js` | Browser UI and verification flow |
 | `docs/lib.js` | BibTeX parsing, comparison, deduping, ranking helpers |
-| `docs/gemma-reranker.js` | Optional Gemma WebGPU rerank bridge |
+| `docs/citation-audit.js` | Citation context extraction, evidence lookup, and support judgement |
+| `docs/gemma-reranker.js` | Optional Gemma WebGPU rerank and judgement bridge |
 | `docs/vllm-reranker.js` | Optional local vLLM rerank bridge |
 | `server/vllm_proxy_server.py` | Static file server and vLLM OpenAI API proxy |
 | `tests/test_lib.js` | Node tests for parsing and ranking helpers |
@@ -110,9 +128,11 @@ Run the lightweight checks:
 node -c docs/lib.js
 node -c docs/gemma-reranker.js
 node -c docs/vllm-reranker.js
+node -c docs/citation-audit.js
 node -c docs/app.js
 node tests/test_lib.js
 node tests/test_vllm_reranker.js
+node tests/test_citation_audit.js
 python3 -m py_compile server/vllm_proxy_server.py
 python3 tests/test_vllm_proxy.py
 ```

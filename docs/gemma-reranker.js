@@ -151,10 +151,19 @@
     return { ...decision, candidate: candidates[decision.index], output };
   }
 
+  async function completePrompt(prompt, { maxNewTokens = 220, onStatus } = {}) {
+    if (!prompt || typeof prompt !== "string") throw new Error("Prompt is required.");
+    onStatus?.("Loading Gemma WebGPU model...");
+    const model = await loadModel(onStatus);
+    onStatus?.("Running local WebGPU judgement...");
+    return model.complete([{ role: "user", content: prompt }], { maxNewTokens });
+  }
+
   exports.GEMMA_MODULE_URL = GEMMA_MODULE_URL;
   exports.ALLOWED_RISK_FLAGS = ALLOWED_RISK_FLAGS;
   exports.canUseWebGPU = canUseWebGPU;
   exports.buildPrompt = buildPrompt;
   exports.parseDecision = parseDecision;
   exports.rerank = rerank;
+  exports.completePrompt = completePrompt;
 })(typeof module !== "undefined" && module.exports ? module.exports : (window.BibGemmaReranker = {}));

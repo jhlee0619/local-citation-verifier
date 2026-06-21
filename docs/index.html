@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Local Citation Verifier — BibTeX QA with Local WebGPU Reranking</title>
-  <meta name="description" content="A browser-based citation quality desk for checking BibTeX against CrossRef and Semantic Scholar, with Gemma WebGPU reranking for ambiguous preprint and publication matches." />
+  <title>Local Citation Verifier — Local bibliography and citation support QA</title>
+  <meta name="description" content="A browser-based citation quality desk for checking BibTeX metadata and judging whether cited manuscript sentences are supported by their referenced papers." />
   <meta name="keywords" content="BibTeX, bibliography checker, verify references, hallucinated citations, LaTeX, CrossRef, Semantic Scholar, DOI, citation checker, academic references, .bib file, Overleaf, BibLaTeX, reference manager, paper verification" />
   <meta name="author" content="Local Citation Verifier contributors" />
   <meta name="robots" content="index, follow" />
@@ -48,11 +48,11 @@
         <div class="hero-copy">
           <p class="hero-kicker">Local bibliography control room</p>
           <h1>Local Citation Verifier</h1>
-          <p class="hero-tagline">Upload or paste BibTeX, verify publication metadata, and rerank ambiguous matches on local WebGPU.</p>
+          <p class="hero-tagline">Verify publication metadata, rerank ambiguous matches, and audit whether cited manuscript sentences are supported by their papers.</p>
           <div class="hero-signals" aria-label="Primary checks">
             <span><strong>CrossRef</strong> metadata</span>
             <span><strong>Semantic Scholar</strong> matching</span>
-            <span><strong>Gemma</strong> local rerank</span>
+            <span><strong>Gemma</strong> local judgement</span>
           </div>
         </div>
         <div class="hero-top-right">
@@ -68,7 +68,12 @@
       </div>
     </header>
 
-    <section class="workspace-shell import-panel" aria-label="BibTeX input">
+    <nav class="tool-switch" aria-label="Tool selector">
+      <button type="button" class="tool-switch-btn active" data-tool-target="verifier">Bibliography verifier</button>
+      <button type="button" class="tool-switch-btn" data-tool-target="citation-audit">Citation support audit</button>
+    </nav>
+
+    <section class="workspace-shell import-panel active" data-tool-view="verifier" aria-label="BibTeX input">
       <div class="workspace-header">
         <div>
           <p class="section-kicker">Import</p>
@@ -102,9 +107,54 @@
       <button class="btn-verify-paste" id="btn-verify-paste">Verify pasted BibTeX</button>
     </div>
     </section>
+
+    <section class="workspace-shell citation-audit-panel" id="citation-audit" data-tool-view="citation-audit" hidden aria-label="Citation support audit">
+      <div class="workspace-header">
+        <div>
+          <p class="section-kicker">Citation support</p>
+          <h2>Judge cited sentences against their papers</h2>
+        </div>
+        <p>Load BibTeX and manuscript text. The local LLM checks each LaTeX citation context conservatively.</p>
+      </div>
+
+      <div class="citation-input-grid">
+        <label class="citation-input-block">
+          <span>BibTeX library</span>
+          <input type="file" id="citation-bib-file" accept=".bib" />
+          <textarea id="citation-bib-input" class="bib-textarea citation-textarea" placeholder="@article{key2024,&#10;  title={Paper title},&#10;  author={Author, A.},&#10;  year={2024},&#10;  doi={10.0000/example}&#10;}"></textarea>
+        </label>
+        <label class="citation-input-block">
+          <span>Manuscript text / LaTeX</span>
+          <input type="file" id="citation-manuscript-file" accept=".txt,.tex,.md" />
+          <textarea id="citation-manuscript-input" class="bib-textarea citation-textarea" placeholder="Paste manuscript text with citations, e.g. Transformer attention mechanisms are widely used in sequence modeling \citep{vaswani2017}."></textarea>
+        </label>
+      </div>
+
+      <div class="citation-action-row">
+        <label class="citation-provider-label">
+          <span>LLM engine</span>
+          <select id="citation-provider" class="option-select">
+            <option value="auto" selected>Auto: vLLM if local server is ready, otherwise WebGPU</option>
+            <option value="webgpu">WebGPU Gemma in this browser</option>
+            <option value="vllm">vLLM server GPU</option>
+          </select>
+        </label>
+        <button class="btn-verify-paste" id="btn-run-citation-audit">Audit citation support</button>
+      </div>
+
+      <div class="citation-summary" aria-label="Citation audit summary">
+        <div><span data-citation-count="supported">0</span><small>Supported</small></div>
+        <div><span data-citation-count="weak">0</span><small>Weak</small></div>
+        <div><span data-citation-count="unsupported">0</span><small>Unsupported</small></div>
+        <div><span data-citation-count="insufficient_evidence">0</span><small>Insufficient</small></div>
+      </div>
+
+      <div class="citation-audit-status" id="citation-audit-status">Ready for BibTeX and manuscript text.</div>
+      <div class="citation-results" id="citation-audit-results"></div>
+    </section>
     </main>
 
-    <div class="results-section">
+    <div class="results-section" data-tool-view="verifier">
       <div class="summary-bar">
         <button type="button" class="summary-badge badge-verified active" data-filter="verified">
           <span class="summary-dot"></span>
@@ -277,6 +327,7 @@
   <script src="lib.js?v=20260621-prompt-guardrails"></script>
   <script src="gemma-reranker.js?v=20260621-prompt-guardrails"></script>
   <script src="vllm-reranker.js?v=20260621-prompt-guardrails"></script>
+  <script src="citation-audit.js?v=20260621-citation-audit"></script>
   <script src="app.js?v=20260621-prompt-guardrails"></script>
 </body>
 </html>
