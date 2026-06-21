@@ -134,15 +134,17 @@
         <button class="btn-verify-paste" id="btn-run-citation-audit">Audit citation support</button>
       </div>
 
-      <div class="citation-summary" aria-label="Citation audit summary">
-        <div><span data-citation-count="supported">0</span><small>Supported</small></div>
-        <div><span data-citation-count="weak">0</span><small>Weak</small></div>
-        <div><span data-citation-count="unsupported">0</span><small>Unsupported</small></div>
-        <div><span data-citation-count="insufficient_evidence">0</span><small>Insufficient</small></div>
-      </div>
+      <div class="citation-output" id="citation-output" hidden>
+        <div class="citation-summary" aria-label="Citation audit summary">
+          <div><span data-citation-count="supported">0</span><small>Supported</small></div>
+          <div><span data-citation-count="weak">0</span><small>Weak</small></div>
+          <div><span data-citation-count="unsupported">0</span><small>Unsupported</small></div>
+          <div><span data-citation-count="insufficient_evidence">0</span><small>Insufficient</small></div>
+        </div>
 
-      <div class="citation-audit-status" id="citation-audit-status">Ready for BibTeX and manuscript text.</div>
-      <div class="citation-results" id="citation-audit-results"></div>
+        <div class="citation-audit-status" id="citation-audit-status"></div>
+        <div class="citation-results" id="citation-audit-results"></div>
+      </div>
     </section>
     </main>
 
@@ -319,7 +321,7 @@
   <script src="lib.js?v=20260621-prompt-guardrails"></script>
   <script src="gemma-reranker.js?v=20260621-prompt-guardrails"></script>
   <script src="vllm-reranker.js?v=20260621-prompt-guardrails"></script>
-  <script src="citation-audit.js?v=20260621-unified-tools"></script>
+  <script src="citation-audit.js?v=20260621-hide-empty-output"></script>
   <script src="app.js?v=20260621-prompt-guardrails"></script>
 </body>
 </html>

@@ -358,12 +358,12 @@
     const bibFile = root.querySelector("#citation-bib-file");
     const manuscriptFile = root.querySelector("#citation-manuscript-file");
     const runButton = root.querySelector("#btn-run-citation-audit");
+    const outputEl = root.querySelector("#citation-output");
     const statusEl = root.querySelector("#citation-audit-status");
     const resultsEl = root.querySelector("#citation-audit-results");
 
     bindFileInput(bibFile, bibInput);
     bindFileInput(manuscriptFile, manuscriptInput);
-    renderResults(resultsEl, []);
 
     runButton?.addEventListener("click", async () => {
       const bibText = bibInput?.value || "";
@@ -373,6 +373,9 @@
       const entriesByKey = mapEntriesByKey(entries);
       const evidenceCache = new Map();
       const results = [];
+      if (outputEl) outputEl.hidden = false;
+      if (resultsEl) resultsEl.innerHTML = "";
+      updateSummary(root, results);
 
       if (!entries.length) {
         statusEl.textContent = "Add a BibTeX file before running citation support.";
