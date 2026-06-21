@@ -357,7 +357,6 @@
     const manuscriptInput = root.querySelector("#citation-manuscript-input");
     const bibFile = root.querySelector("#citation-bib-file");
     const manuscriptFile = root.querySelector("#citation-manuscript-file");
-    const providerInput = root.querySelector("#citation-provider");
     const runButton = root.querySelector("#btn-run-citation-audit");
     const statusEl = root.querySelector("#citation-audit-status");
     const resultsEl = root.querySelector("#citation-audit-results");
@@ -401,7 +400,7 @@
             context,
             entry,
             evidence,
-            provider: providerInput?.value || "auto",
+            provider: "auto",
             onStatus: (message) => { statusEl.textContent = `${context.key}: ${message}`; },
           });
           results.push({ context, entry, evidence, judgement });

@@ -37,7 +37,7 @@
   }
   </script>
 
-  <link rel="stylesheet" href="style.css?v=20260621-ui-refine" />
+  <link rel="stylesheet" href="style.css?v=20260621-unified-tools" />
 </head>
 <body>
   <div class="page-wrap">
@@ -131,14 +131,6 @@
       </div>
 
       <div class="citation-action-row">
-        <label class="citation-provider-label">
-          <span>LLM engine</span>
-          <select id="citation-provider" class="option-select">
-            <option value="auto" selected>Auto: vLLM if local server is ready, otherwise WebGPU</option>
-            <option value="webgpu">WebGPU Gemma in this browser</option>
-            <option value="vllm">vLLM server GPU</option>
-          </select>
-        </label>
         <button class="btn-verify-paste" id="btn-run-citation-audit">Audit citation support</button>
       </div>
 
@@ -327,7 +319,7 @@
   <script src="lib.js?v=20260621-prompt-guardrails"></script>
   <script src="gemma-reranker.js?v=20260621-prompt-guardrails"></script>
   <script src="vllm-reranker.js?v=20260621-prompt-guardrails"></script>
-  <script src="citation-audit.js?v=20260621-citation-audit"></script>
+  <script src="citation-audit.js?v=20260621-unified-tools"></script>
   <script src="app.js?v=20260621-prompt-guardrails"></script>
 </body>
 </html>
