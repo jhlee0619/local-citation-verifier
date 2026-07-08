@@ -56,7 +56,7 @@ Then open one of these addresses and choose `vLLM server` in the rerank engine m
 
 - Same machine as the proxy: `http://127.0.0.1:8088/`
 - LAN access: `http://<server-host>:8088/`
-- SSH tunnel from your laptop: `ssh -L 18088:127.0.0.1:8088 aicon_spark`, then open `http://127.0.0.1:18088/`
+- SSH tunnel from your laptop: `ssh -L 18088:127.0.0.1:8088 user@server.example.com`, then open `http://127.0.0.1:18088/`
 
 When the proxy health check succeeds, the app selects vLLM automatically. In this mode, rerank inference runs on the server GPU, while the UI still runs in your browser.
 
