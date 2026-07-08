@@ -7,31 +7,111 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 from dataclasses import dataclass
 from http import HTTPStatus
+from http.client import RemoteDisconnected
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Final, TypeAlias
-from urllib.parse import parse_qs, urlparse
+from threading import RLock
+from typing import Callable, Final, TypeAlias
+from urllib.parse import parse_qs, parse_qsl, urlencode, urlparse, urlunparse
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 JsonValue: TypeAlias = None | bool | int | float | str | list["JsonValue"] | dict[str, "JsonValue"]
 JsonObject: TypeAlias = dict[str, JsonValue]
 
-DEFAULT_HOST: Final = "0.0.0.0"
+DEFAULT_HOST: Final = "127.0.0.1"
 DEFAULT_PORT: Final = 8088
 DEFAULT_VLLM_BASE_URL: Final = "http://127.0.0.1:8000"
 MAX_BODY_BYTES: Final = 64 * 1024
 MAX_PROMPT_CHARS: Final = 24_000
 MAX_CANDIDATES: Final = 50
+DEFAULT_RERANK_MAX_TOKENS: Final = 160
+MAX_COMPLETION_TOKENS: Final = 512
 ARXIV_ID_RE: Final = re.compile(r"^\d{4}\.\d{4,5}(?:v\d+)?$")
+SEMANTIC_SCHOLAR_BASE: Final = "https://api.semanticscholar.org/"
+CROSSREF_BASE: Final = "https://api.crossref.org/"
+DBLP_BASE: Final = "https://dblp.org/"
+OPENREVIEW_BASE: Final = "https://api.openreview.net/"
+SEMANTIC_SCHOLAR_ALLOWED_PREFIXES: Final = (
+    "graph/v1/paper/search",
+    "graph/v1/paper/search/match",
+    "graph/v1/paper/",
+)
+CROSSREF_ALLOWED_PREFIXES: Final = ("works",)
+DBLP_ALLOWED_PREFIXES: Final = ("search/publ/api",)
+OPENREVIEW_ALLOWED_PREFIXES: Final = ("notes/search",)
+USER_AGENT: Final = "local-citation-verifier/1.0"
+CSP_POLICY: Final = (
+    "default-src 'self'; "
+    "base-uri 'none'; "
+    "object-src 'none'; "
+    "frame-ancestors 'none'; "
+    "form-action 'self'; "
+    "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://unpkg.com https://huggingface.co https://dblp.org https://openreview.net; "
+    "connect-src 'self' https://api.crossref.org https://api.semanticscholar.org https://dblp.org https://api.openreview.net https://openreview.net "
+    "https://export.arxiv.org https://arxiv.org https://huggingface.co https://*.huggingface.co https://*.hf.co https://cas-bridge.xethub.hf.co https://cas-server.xethub.hf.co https://transfer.xethub.hf.co; "
+    "img-src 'self' data: https:; "
+    "style-src 'self' 'unsafe-inline'; "
+    "worker-src 'self' blob:; "
+    "font-src 'self' data:"
+)
+X_FRAME_OPTIONS: Final = "DENY"
+METADATA_CACHE_TTL_SECONDS: Final = 24 * 60 * 60
+ARXIV_CACHE_TTL_SECONDS: Final = 7 * 24 * 60 * 60
 
+
+
+
+@dataclass(frozen=True, slots=True)
+class CachedBytes:
+    status: int
+    body: bytes
+    expires_at: float
+
+
+class TtlByteCache:
+    def __init__(self, ttl_seconds: float, now: Callable[[], float] = time.monotonic) -> None:
+        self._ttl_seconds = ttl_seconds
+        self._now = now
+        self._items: dict[str, CachedBytes] = {}
+        self._lock = RLock()
+
+    def get(self, key: str) -> tuple[int, bytes] | None:
+        with self._lock:
+            cached = self._items.get(key)
+            if cached is None:
+                return None
+            if cached.expires_at <= self._now():
+                del self._items[key]
+                return None
+            return cached.status, cached.body
+
+    def set(self, key: str, status: int, body: bytes) -> None:
+        with self._lock:
+            self._items[key] = CachedBytes(status=status, body=body, expires_at=self._now() + self._ttl_seconds)
+
+    def clear(self) -> None:
+        with self._lock:
+            self._items.clear()
+
+
+def canonical_cache_key(url: str) -> str:
+    parsed = urlparse(url)
+    query = urlencode(sorted(parse_qsl(parsed.query, keep_blank_values=True)))
+    return urlunparse((parsed.scheme, parsed.netloc, parsed.path, "", query, ""))
+
+
+METADATA_RESPONSE_CACHE = TtlByteCache(METADATA_CACHE_TTL_SECONDS)
+ARXIV_BIBTEX_CACHE = TtlByteCache(ARXIV_CACHE_TTL_SECONDS)
 
 @dataclass(frozen=True, slots=True)
 class RerankRequest:
     prompt: str
     candidate_count: int
+    max_tokens: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,6 +158,7 @@ def parse_json_object(raw: bytes) -> JsonObject:
 def parse_rerank_request(data: JsonObject) -> RerankRequest:
     prompt = data.get("prompt")
     candidate_count = data.get("candidate_count")
+    max_tokens = data.get("max_tokens", DEFAULT_RERANK_MAX_TOKENS)
     if not isinstance(prompt, str) or not prompt.strip():
         raise BadRequestError("prompt must be a non-empty string")
     if len(prompt) > MAX_PROMPT_CHARS:
@@ -86,7 +167,11 @@ def parse_rerank_request(data: JsonObject) -> RerankRequest:
         raise BadRequestError("candidate_count must be an integer")
     if candidate_count < 1 or candidate_count > MAX_CANDIDATES:
         raise BadRequestError("candidate_count is out of range")
-    return RerankRequest(prompt=prompt, candidate_count=candidate_count)
+    if not isinstance(max_tokens, int):
+        raise BadRequestError("max_tokens must be an integer")
+    if max_tokens < 1 or max_tokens > MAX_COMPLETION_TOKENS:
+        raise BadRequestError("max_tokens is out of range")
+    return RerankRequest(prompt=prompt, candidate_count=candidate_count, max_tokens=max_tokens)
 
 
 def post_json(url: str, payload: JsonObject, timeout_seconds: float) -> JsonObject:
@@ -115,6 +200,30 @@ def get_json(url: str, timeout_seconds: float) -> JsonObject:
         raise UpstreamError("vLLM request timed out") from exc
 
 
+def validate_proxy_path(path: str, allowed_prefixes: tuple[str, ...]) -> str:
+    normalized = path.lstrip("/")
+    if not normalized or ".." in normalized.split("/"):
+        raise BadRequestError("proxy path is invalid")
+    if not any(normalized.startswith(prefix) for prefix in allowed_prefixes):
+        raise BadRequestError("proxy path is not allowed")
+    return normalized
+
+
+def fetch_upstream(url: str, timeout_seconds: float) -> tuple[int, bytes]:
+    request = Request(url, headers={"User-Agent": USER_AGENT})
+    try:
+        with urlopen(request, timeout=timeout_seconds) as response:
+            return response.status, response.read()
+    except HTTPError as exc:
+        return exc.code, exc.read()
+    except URLError as exc:
+        raise UpstreamError(f"upstream is unreachable: {exc.reason}") from exc
+    except RemoteDisconnected as exc:
+        raise UpstreamError("upstream closed the connection before responding") from exc
+    except TimeoutError as exc:
+        raise UpstreamError("upstream request timed out") from exc
+
+
 def parse_arxiv_id(value: str | None) -> str:
     arxiv_id = (value or "").strip()
     if not ARXIV_ID_RE.fullmatch(arxiv_id):
@@ -123,13 +232,18 @@ def parse_arxiv_id(value: str | None) -> str:
 
 
 def fetch_arxiv_bibtex(arxiv_id: str, timeout_seconds: float) -> str:
+    cached = ARXIV_BIBTEX_CACHE.get(arxiv_id)
+    if cached is not None:
+        return cached[1].decode("utf-8")
     request = Request(
         f"https://arxiv.org/bibtex/{arxiv_id}",
         headers={"User-Agent": "local-citation-verifier/1.0"},
     )
     try:
         with urlopen(request, timeout=timeout_seconds) as response:
-            return response.read().decode("utf-8")
+            body = response.read()
+            ARXIV_BIBTEX_CACHE.set(arxiv_id, response.status, body)
+            return body.decode("utf-8")
     except HTTPError as exc:
         raise UpstreamError(f"arXiv returned HTTP {exc.code}") from exc
     except URLError as exc:
@@ -170,7 +284,7 @@ def make_chat_payload(model: str, rerank: RerankRequest) -> JsonObject:
         "model": model,
         "messages": [{"role": "user", "content": rerank.prompt}],
         "temperature": 0,
-        "max_tokens": 160,
+        "max_tokens": rerank.max_tokens,
     }
 
 
@@ -180,12 +294,30 @@ class CitationRequestHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args: object, **kwargs: object) -> None:  # noqa: OBJECT_OK
         super().__init__(*args, directory=str(self.config.docs_dir), **kwargs)
 
+    def end_headers(self) -> None:
+        self.send_header("Content-Security-Policy", CSP_POLICY)
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", X_FRAME_OPTIONS)
+        super().end_headers()
+
     def do_GET(self) -> None:
         if self.path == "/api/rerank/vllm/health":
             self.handle_health()
             return
         if self.path.startswith("/api/arxiv/bibtex"):
             self.handle_arxiv_bibtex()
+            return
+        if self.path.startswith("/api/semanticscholar/"):
+            self.handle_semanticscholar_proxy()
+            return
+        if self.path.startswith("/api/crossref/"):
+            self.handle_crossref_proxy()
+            return
+        if self.path.startswith("/api/dblp/"):
+            self.handle_dblp_proxy()
+            return
+        if self.path.startswith("/api/openreview/"):
+            self.handle_openreview_proxy()
             return
         super().do_GET()
 
@@ -212,6 +344,63 @@ class CitationRequestHandler(SimpleHTTPRequestHandler):
             self.write_json(HTTPStatus.BAD_REQUEST, {"error": exc.message})
         except UpstreamError as exc:
             self.write_json(HTTPStatus.BAD_GATEWAY, {"error": exc.message})
+
+    def handle_semanticscholar_proxy(self) -> None:
+        self.handle_metadata_proxy(
+            upstream_base=SEMANTIC_SCHOLAR_BASE,
+            allowed_prefixes=SEMANTIC_SCHOLAR_ALLOWED_PREFIXES,
+            route_prefix="/api/semanticscholar/",
+        )
+
+    def handle_crossref_proxy(self) -> None:
+        self.handle_metadata_proxy(
+            upstream_base=CROSSREF_BASE,
+            allowed_prefixes=CROSSREF_ALLOWED_PREFIXES,
+            route_prefix="/api/crossref/",
+        )
+
+    def handle_dblp_proxy(self) -> None:
+        self.handle_metadata_proxy(
+            upstream_base=DBLP_BASE,
+            allowed_prefixes=DBLP_ALLOWED_PREFIXES,
+            route_prefix="/api/dblp/",
+        )
+
+    def handle_openreview_proxy(self) -> None:
+        self.handle_metadata_proxy(
+            upstream_base=OPENREVIEW_BASE,
+            allowed_prefixes=OPENREVIEW_ALLOWED_PREFIXES,
+            route_prefix="/api/openreview/",
+        )
+
+    def handle_metadata_proxy(
+        self,
+        *,
+        upstream_base: str,
+        allowed_prefixes: tuple[str, ...],
+        route_prefix: str,
+    ) -> None:
+        try:
+            parsed = urlparse(self.path)
+            suffix = validate_proxy_path(parsed.path[len(route_prefix):], allowed_prefixes)
+            upstream_url = f"{upstream_base}{suffix}"
+            if parsed.query:
+                upstream_url = f"{upstream_url}?{parsed.query}"
+            key = canonical_cache_key(upstream_url)
+            cached = METADATA_RESPONSE_CACHE.get(key)
+            if cached is None:
+                status, body = fetch_upstream(upstream_url, timeout_seconds=12.0)
+                if status == HTTPStatus.OK:
+                    METADATA_RESPONSE_CACHE.set(key, status, body)
+            else:
+                status, body = cached
+            self.write_upstream(HTTPStatus(status), body)
+        except BadRequestError as exc:
+            self.write_json(HTTPStatus.BAD_REQUEST, {"error": exc.message})
+        except UpstreamError as exc:
+            self.write_json(HTTPStatus.BAD_GATEWAY, {"error": exc.message})
+        except ValueError as exc:
+            self.write_json(HTTPStatus.BAD_GATEWAY, {"error": str(exc)})
 
     def handle_rerank(self) -> None:
         try:
@@ -255,6 +444,13 @@ class CitationRequestHandler(SimpleHTTPRequestHandler):
         self.send_header("Content-Length", str(len(encoded)))
         self.end_headers()
         self.wfile.write(encoded)
+
+    def write_upstream(self, status: HTTPStatus, body: bytes) -> None:
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
 
 def build_config() -> AppConfig:

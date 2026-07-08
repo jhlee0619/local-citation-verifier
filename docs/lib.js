@@ -33,7 +33,11 @@
   }
 
   function normalizeTitle(title) {
-    return stripLatex(title).toLowerCase().trim();
+    return stripLatex(title).replace(/[βΒ]/g, "beta").toLowerCase().trim();
+  }
+
+  function looseTitleText(title) {
+    return normalizeTitle(title).replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
   }
 
   // ─── BibTeX parser / serializer ──────────────────────────────────────
@@ -121,20 +125,37 @@
     return { value: buf, next: str.length };
   }
 
-  function extractNumberFieldValue(str, start) {
-    const m = /^(\d+)/.exec(str.slice(start));
-    if (!m) return { value: "", next: start };
-    let next = start + m[1].length;
-    next = skipWhitespace(str, next);
+  function extractBareFieldValue(str, start) {
+    let i = start;
+    while (i < str.length && str[i] !== ",") i++;
+    let next = skipWhitespace(str, i);
     if (str[next] === ",") next = skipWhitespace(str, next + 1);
-    return { value: m[1], next };
+    return { value: str.slice(start, i).trim(), next };
+  }
+
+  function parseYearNumber(value) {
+    const match = String(value || "").match(/\b(1[5-9]\d{2}|20\d{2}|21\d{2})\b/);
+    return match ? Number(match[1]) : NaN;
+  }
+
+  function chooseDuplicateFieldValue(key, currentValue, nextValue) {
+    if (key !== "year") return nextValue;
+    const currentYear = parseYearNumber(currentValue);
+    const nextYear = parseYearNumber(nextValue);
+    if (Number.isFinite(currentYear) && Number.isFinite(nextYear))
+      return String(Math.max(currentYear, nextYear));
+    return nextValue || currentValue;
   }
 
   function parseEntryFields(body) {
     const fields = {};
     let i = skipWhitespace(body, 0);
     while (i < body.length) {
-      const nameMatch = /^(\w+)\s*=\s*/.exec(body.slice(i));
+      if (body[i] === ",") {
+        i = skipWhitespace(body, i + 1);
+        continue;
+      }
+      const nameMatch = /^([A-Za-z][\w-]*)\s*=\s*/.exec(body.slice(i));
       if (!nameMatch) break;
       const key = nameMatch[1].toLowerCase();
       i += nameMatch[0].length;
@@ -144,27 +165,112 @@
       let ext;
       if (body[i] === "{") ext = extractBracedFieldValue(body, i);
       else if (body[i] === '"') ext = extractQuotedFieldValue(body, i);
-      else if (/\d/.test(body[i])) ext = extractNumberFieldValue(body, i);
-      else break;
+      else ext = extractBareFieldValue(body, i);
 
-      fields[key] = ext.value.replace(/\s*\n\s*/g, " ").trim();
-      i = ext.next;
-      i = skipWhitespace(body, i);
+      if (ext.next === i) break;
+      const value = ext.value.replace(/\s*\n\s*/g, " ").trim();
+      fields[key] = Object.prototype.hasOwnProperty.call(fields, key)
+        ? chooseDuplicateFieldValue(key, fields[key], value)
+        : value;
+      i = skipWhitespace(body, ext.next);
     }
     return fields;
   }
 
+  function findEntryClose(content, openIndex, openChar) {
+    const closeChar = openChar === "{" ? "}" : ")";
+    let depth = 1;
+    let braceDepth = 0;
+    let inQuote = false;
+    for (let i = openIndex + 1; i < content.length; i++) {
+      const c = content[i];
+      if (openChar === "{") {
+        if (c === "{") depth++;
+        else if (c === "}") {
+          depth--;
+          if (depth === 0) return i;
+        }
+        continue;
+      }
+      if (inQuote) {
+        if (c === "\\" && i + 1 < content.length) {
+          i++;
+          continue;
+        }
+        if (c === '"') inQuote = false;
+        continue;
+      }
+      if (c === '"') {
+        inQuote = true;
+        continue;
+      }
+      if (c === "{") braceDepth++;
+      else if (c === "}" && braceDepth > 0) braceDepth--;
+      else if (c === closeChar && braceDepth === 0) {
+        depth--;
+        if (depth === 0) return i;
+      }
+    }
+    return -1;
+  }
+
+  function splitEntryKeyAndBody(inner) {
+    let depth = 0;
+    let inQuote = false;
+    for (let i = 0; i < inner.length; i++) {
+      const c = inner[i];
+      if (c === "\\") {
+        i++;
+        continue;
+      }
+      if (inQuote) {
+        if (c === "\\" && i + 1 < content.length) {
+          i++;
+          continue;
+        }
+        if (c === '"') inQuote = false;
+        continue;
+      }
+      if (c === '"') {
+        inQuote = true;
+      } else if (c === "{") {
+        depth++;
+      } else if (c === "}" && depth > 0) {
+        depth--;
+      } else if (c === "," && depth === 0) {
+        return { id: inner.slice(0, i).trim(), body: inner.slice(i + 1).trim() };
+      }
+    }
+    return { id: inner.trim(), body: "" };
+  }
+
   function parseBib(content) {
     const entries = [];
-    const re = /@(\w+)\s*\{([^,]*),([^@]*)/g;
-    let m;
-    while ((m = re.exec(content)) !== null) {
-      const entryType = m[1].toLowerCase();
+    let i = 0;
+    while (i < content.length) {
+      const at = content.indexOf("@", i);
+      if (at === -1) break;
+      const typeMatch = /^@([A-Za-z][\w-]*)\s*/.exec(content.slice(at));
+      if (!typeMatch) {
+        i = at + 1;
+        continue;
+      }
+      const entryType = typeMatch[1].toLowerCase();
+      let openIndex = skipWhitespace(content, at + typeMatch[0].length);
+      const openChar = content[openIndex];
+      if (openChar !== "{" && openChar !== "(") {
+        i = at + 1;
+        continue;
+      }
+      const closeIndex = findEntryClose(content, openIndex, openChar);
+      const innerEnd = closeIndex === -1 ? content.length : closeIndex;
+      const inner = content.slice(openIndex + 1, innerEnd);
+      i = closeIndex === -1 ? content.length : closeIndex + 1;
+
       if (entryType === "string" || entryType === "preamble" || entryType === "comment")
         continue;
-      const id = m[2].trim();
-      let body = m[3];
-      body = body.replace(/\}\s*$/, "").trim();
+      const { id, body } = splitEntryKeyAndBody(inner);
+      if (!id) continue;
       const entry = { ENTRYTYPE: entryType, ID: id };
       Object.assign(entry, parseEntryFields(body));
       entries.push(entry);
@@ -172,15 +278,71 @@
     return entries;
   }
 
-  function entriesToBib(entries) {
+  // ─── Unicode → LaTeX escaping (optional export for pdfLaTeX/BibTeX) ───
+  // Only codepoints > U+007F are transformed, so any LaTeX escapes already in
+  // the input (pure ASCII like \"a, \H{o}) are left untouched — no double escaping.
+  const LATEX_COMBINING_MAP = {
+    "̀": "\\`", "́": "\\'", "̂": "\\^", "̃": "\\~",
+    "̄": "\\=", "̆": "\\u", "̇": "\\.", "̈": '\\"',
+    "̊": "\\r", "̋": "\\H", "̌": "\\v",
+    "̣": "\\d", "̧": "\\c", "̨": "\\k", "̱": "\\b",
+  };
+  const LATEX_SPECIAL_MAP = {
+    "ß": "{\\ss}",
+    "ø": "{\\o}", "Ø": "{\\O}",
+    "æ": "{\\ae}", "Æ": "{\\AE}",
+    "œ": "{\\oe}", "Œ": "{\\OE}",
+    "å": "{\\aa}", "Å": "{\\AA}",
+    "ł": "{\\l}", "Ł": "{\\L}",
+    "đ": "{\\dj}", "Đ": "{\\DJ}",
+    "ð": "{\\dh}", "Ð": "{\\DH}",
+    "þ": "{\\th}", "Þ": "{\\TH}",
+    "ı": "{\\i}", "ȷ": "{\\j}",
+  };
+  const LATEX_PUNCT_MAP = {
+    "–": "--", "—": "---",
+    "‘": "`", "’": "'", "“": "``", "”": "''",
+    "…": "\\ldots{}", " ": "~", "­": "", " ": " ", " ": " ",
+  };
+
+  function unicodeCharToLatex(ch) {
+    if (LATEX_SPECIAL_MAP[ch]) return LATEX_SPECIAL_MAP[ch];
+    if (LATEX_PUNCT_MAP[ch] !== undefined) return LATEX_PUNCT_MAP[ch];
+    const decomposed = ch.normalize("NFD");
+    const base = decomposed[0];
+    if (decomposed.length > 1 && base && base.charCodeAt(0) <= 127 && /[A-Za-z]/.test(base)) {
+      let out = base;
+      for (let i = 1; i < decomposed.length; i++) {
+        const acc = LATEX_COMBINING_MAP[decomposed[i]];
+        if (!acc) return ch; // unknown combining mark — leave char untouched
+        out = `${acc}{${out}}`;
+      }
+      return out;
+    }
+    return ch; // unmapped (e.g. CJK, rare symbol) — leave as-is, never corrupt
+  }
+
+  function unicodeToLatex(text) {
+    let out = "";
+    for (const ch of String(text || "").normalize("NFC"))
+      out += ch.codePointAt(0) <= 127 ? ch : unicodeCharToLatex(ch);
+    return out;
+  }
+
+  function entriesToBib(entries, options = {}) {
+    const escapeValue = options.latexEscape ? unicodeToLatex : (value) => value;
     const lines = [];
     for (const entry of entries) {
       const type = entry.ENTRYTYPE || "misc";
       const id = entry.ID || "unknown";
       lines.push(`@${type}{${id},`);
+      const emittedFields = new Set();
       for (const [k, v] of Object.entries(entry)) {
         if (k === "ENTRYTYPE" || k === "ID" || k.startsWith("_")) continue;
-        lines.push(`  ${k} = {${v}},`);
+        const canonicalKey = String(k || "").trim().toLowerCase();
+        if (!canonicalKey || emittedFields.has(canonicalKey)) continue;
+        emittedFields.add(canonicalKey);
+        lines.push(`  ${k} = {${escapeValue(v)}},`);
       }
       lines.push("}\n");
     }
@@ -258,6 +420,105 @@
     return normalizeText(parts[parts.length - 1] || "");
   }
 
+  function splitAuthorName(author) {
+    const cleaned = stripLatex(author).replace(/[{}]/g, "").trim();
+    if (!cleaned) return { family: "", given: "" };
+    if (cleaned.includes(",")) {
+      const [family, ...givenParts] = cleaned.split(",");
+      return { family: normalizeText(family), given: normalizeText(givenParts.join(" ")) };
+    }
+    const parts = cleaned.split(/\s+/).filter(Boolean);
+    return { family: normalizeText(parts.pop() || ""), given: normalizeText(parts.join(" ")) };
+  }
+
+  function initialsFromGiven(given) {
+    return normalizeText(given)
+      .split(/\s+/)
+      .filter(Boolean)
+      .map(part => part[0] || "")
+      .join("");
+  }
+
+  function isInitialOnlyGiven(given) {
+    const compact = normalizeText(given).replace(/[.\s-]/g, "");
+    return !!compact && compact.length <= 3;
+  }
+
+  function hasOnlyInitialShortening(originalAuthor, foundAuthor) {
+    const originalParts = authorParts(originalAuthor);
+    const foundParts = authorParts(foundAuthor);
+    if (originalParts.length !== foundParts.length || !originalParts.length) return false;
+    return originalParts.every((originalPart, index) => {
+      const original = splitAuthorName(originalPart);
+      const found = splitAuthorName(foundParts[index]);
+      if (!original.family || original.family !== found.family) return false;
+      if (!original.given || !found.given || original.given === found.given) return true;
+      return isInitialOnlyGiven(found.given) && initialsFromGiven(original.given).startsWith(initialsFromGiven(found.given));
+    });
+  }
+
+  const SURNAME_PARTICLE_WORDS = new Set([
+    "al", "da", "das", "de", "del", "della", "den", "der", "di", "dos",
+    "du", "la", "le", "ten", "ter", "van", "von",
+  ]);
+
+  function trimTrailingNameParticles(given) {
+    const parts = normalizeText(given).split(/\s+/).filter(Boolean);
+    while (parts.length && SURNAME_PARTICLE_WORDS.has(parts[parts.length - 1])) parts.pop();
+    return parts.join(" ");
+  }
+
+  function familyVariants(name) {
+    const variants = new Set();
+    const family = normalizeText(name.family);
+    const given = normalizeText(name.given);
+    if (family) variants.add(family);
+
+    const familyParts = family.split(/\s+/).filter(Boolean);
+    while (familyParts.length > 1 && SURNAME_PARTICLE_WORDS.has(familyParts[0])) {
+      familyParts.shift();
+      variants.add(familyParts.join(" "));
+    }
+
+    const givenParts = given.split(/\s+/).filter(Boolean);
+    const trailingParticles = [];
+    while (givenParts.length && SURNAME_PARTICLE_WORDS.has(givenParts[givenParts.length - 1])) {
+      trailingParticles.unshift(givenParts.pop());
+    }
+    if (family && trailingParticles.length) variants.add(`${trailingParticles.join(" ")} ${family}`);
+    return variants;
+  }
+
+  function familiesOverlap(original, found) {
+    const originalVariants = familyVariants(original);
+    const foundVariants = familyVariants(found);
+    for (const variant of originalVariants) if (foundVariants.has(variant)) return true;
+    return false;
+  }
+
+  function givensCompatibleForSuppression(originalGiven, foundGiven) {
+    const original = trimTrailingNameParticles(originalGiven);
+    const found = trimTrailingNameParticles(foundGiven);
+    if (!original || !found || original === found) return true;
+    const originalInitials = initialsFromGiven(original);
+    const foundInitials = initialsFromGiven(found);
+    if (!originalInitials || !foundInitials) return true;
+    if (isInitialOnlyGiven(found)) return originalInitials[0] === foundInitials[0];
+    return originalInitials === foundInitials || originalInitials.startsWith(foundInitials);
+  }
+
+  function hasParticleOrInitialOnlyEquivalentAuthors(originalAuthor, foundAuthor) {
+    const originalParts = authorParts(originalAuthor);
+    const foundParts = authorParts(foundAuthor);
+    if (originalParts.length !== foundParts.length || !originalParts.length) return false;
+    return originalParts.every((originalPart, index) => {
+      const original = splitAuthorName(originalPart);
+      const found = splitAuthorName(foundParts[index]);
+      if (!original.family || !found.family || !familiesOverlap(original, found)) return false;
+      return givensCompatibleForSuppression(original.given, found.given);
+    });
+  }
+
   function shouldSuppressAuthorSuggestion(originalAuthor, foundAuthor) {
     const originalParts = authorParts(originalAuthor);
     const foundParts = authorParts(foundAuthor);
@@ -267,38 +528,110 @@
       const foundFirst = firstAuthorLastName(foundAuthor);
       return !originalFirst || !foundFirst || originalFirst === foundFirst;
     }
+    if (hasOnlyInitialShortening(originalAuthor, foundAuthor)) return true;
+    if (hasParticleOrInitialOnlyEquivalentAuthors(originalAuthor, foundAuthor)) return true;
     return foundParts.length >= 30 && originalParts.length <= 6;
   }
 
+  function normalizeVenueText(text) {
+    return normalizeText(stripLatex(text))
+      .replace(/\\+&/g, " and ")
+      .replace(/&/g, " and ")
+      .replace(/^the\s+/, "")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function normalizeVenueCore(text) {
+    return normalizeVenueText(text)
+      .replace(/\d+(?:st|nd|rd|th)?/g, " ")
+      .replace(/(?:proceedings|proc|of|the|acm|ieee|cvf|springer|international|conference|symposium|workshop|on|sigkdd)/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function isPlaceholderPages(pages) {
+    return /arxiv|preprint|e-?print|forthcoming|in\s+press/i.test(String(pages || ""));
+  }
+
+  function isConferenceVenueName(venue) {
+    const v = normalizeVenueText(venue);
+    if (/^proceedings of (?:the )?(?:national academy of sciences|ieee)\b/.test(v)) return false;
+    return /(?:^|\s)(?:neurips|icml|iclr|cvpr|iccv|eccv|acl|emnlp|naacl|aaai|ijcai|kdd|chi|icassp|usenix|sigmod|vldb)(?:\s|$)/.test(v) ||
+      /conference on learning representations|conference on machine learning|computer vision and pattern recognition|neural information processing systems|association for computational linguistics|world wide web conference|the web conference/.test(v);
+  }
+
+  /**
+   * Normalize heterogeneous BibTeX shapes before lookup/compare so source-specific
+   * conventions (arXiv-in-journal, NeurIPS-as-journal, placeholder pages) compare fairly.
+   */
+  function normalizeEntryForLookup(entry) {
+    const out = { ...entry };
+    const journal = String(out.journal || "").trim();
+    const arxivInJournal = extractPrefixedArxivId(journal) || extractArxivIdFromArxivText(journal);
+    if (arxivInJournal) {
+      if (!out.eprint) out.eprint = arxivInJournal;
+      if (!out.archiveprefix) out.archiveprefix = "arXiv";
+    }
+    if (/^arxiv\s*e-?prints?$/i.test(journal)) out.journal = "";
+
+    if (!out.eprint) {
+      const fromUrl = extractPrefixedArxivId(out.url || "");
+      if (fromUrl) out.eprint = fromUrl;
+    }
+
+    const pages = String(out.pages || "").trim();
+    if (isPlaceholderPages(pages)) delete out.pages;
+
+    const entryType = (out.ENTRYTYPE || "").toLowerCase();
+    if (entryType === "article" && journal && !out.booktitle && isConferenceVenueName(journal)) {
+      out.booktitle = out.journal;
+      delete out.journal;
+    }
+    return out;
+  }
+
   function compareField(field, a, b) {
+    if (field === "journal" || field === "booktitle") {
+      const na = normalizeVenueText(a), nb = normalizeVenueText(b);
+      if (!na && !nb) return 100;
+      if (!na || !nb) return 0;
+      const ca = normalizeVenueCore(expandVenue(a)), cb = normalizeVenueCore(expandVenue(b));
+      if (ca && cb && (ca === cb || ca.includes(cb) || cb.includes(ca))) return 100;
+      return tokenSortRatio(na, nb);
+    }
     const na = normalizeText(a), nb = normalizeText(b);
     if (!na && !nb) return 100;
     if (!na || !nb) return 0;
-    if (field === "year" || field === "doi") return na === nb ? 100 : 0;
+    if (field === "year") return na === nb ? 100 : 0;
+    if (field === "doi") return normalizeDoiValue(a) === normalizeDoiValue(b) ? 100 : 0;
     if (field === "author") return compareAuthors(a, b);
     if (field === "pages") return normalizePages(na) === normalizePages(nb) ? 100 : tokenSortRatio(na, nb);
     return tokenSortRatio(na, nb);
   }
 
   function compareEntry(original, found) {
+    const comparableFound = preservePublishedVenue(original, found || {});
     const origTitle = original.title || "";
-    const foundTitle = found.title || "";
+    const foundTitle = comparableFound.title || "";
     const titleScore = tokenSortRatio(normalizeTitle(origTitle), normalizeTitle(foundTitle));
 
     if (titleScore < TITLE_MATCH_THRESHOLD) {
-      return { status: "needs_review", title_score: titleScore, field_diffs: [], suggested: found };
+      return { status: "needs_review", title_score: titleScore, field_diffs: [], suggested: comparableFound };
     }
 
-    const foundJournal = found.journal || "";
-    if (original.booktitle && !original.journal && foundJournal)
-      found.booktitle = foundJournal;
+    const foundJournal = comparableFound.journal || "";
+    if (original.booktitle && !original.journal && foundJournal) {
+      comparableFound.booktitle = foundJournal;
+      delete comparableFound.journal;
+    }
 
     const fieldDiffs = [], enrichments = [];
     let hasDifference = false;
 
     for (const field of COMPARED_FIELDS) {
       const origVal = original[field] || "";
-      const foundVal = found[field] || "";
+      const foundVal = comparableFound[field] || "";
       if (!origVal && !foundVal) continue;
 
       if (!origVal.trim() && foundVal.trim()) {
@@ -437,6 +770,111 @@
     };
   }
 
+  function dblpAuthorText(author) {
+    const raw = typeof author === "string" ? author : (author?.text || "");
+    return stripLatex(raw).replace(/\s+\d{4}$/g, "").trim();
+  }
+
+  function dblpAuthorsToBibtex(authors) {
+    const raw = authors?.author || [];
+    const list = Array.isArray(raw) ? raw : [raw];
+    return list.map(dblpAuthorText).filter(Boolean).join(" and ");
+  }
+
+  function stripDblpTitle(title) {
+    return String(title || "").replace(/\s*\.\s*$/g, "").trim();
+  }
+
+  function dblpToStandard(hit) {
+    const info = hit?.info || hit || {};
+    const venue = expandVenue(info.venue || "");
+    const key = String(info.key || "");
+    const type = String(info.type || "");
+    const isProceedings = /conference|workshop/i.test(type) || key.startsWith("conf/");
+    const out = {
+      title: stripDblpTitle(info.title || ""),
+      author: dblpAuthorsToBibtex(info.authors),
+      year: String(info.year || ""),
+      volume: info.volume || "",
+      number: info.number || "",
+      pages: normalizePageRangeValue(info.pages || ""),
+      doi: info.doi || "",
+      publisher: "",
+      url: safeExternalUrl(info.ee || info.url || ""),
+      _source: "dblp",
+      _dblpKey: key,
+    };
+    if (isProceedings) out.booktitle = venue;
+    else out.journal = venue;
+    return cleanBibliographyEntry(out);
+  }
+
+  function openreviewValue(value) {
+    return value && typeof value === "object" && "value" in value ? value.value : value;
+  }
+
+  function openreviewYear(note, entry) {
+    const content = note?.content || {};
+    const venue = String(openreviewValue(content.venue) || "");
+    const venueid = String(openreviewValue(content.venueid) || "");
+    const invitation = String(note?.invitation || "");
+    const match = /(?:^|\/)(\d{4})(?:\/|)/.exec(`${venueid} ${invitation} ${venue}`);
+    return String(entry?.year || (match ? match[1] : ""));
+  }
+
+  function openreviewBooktitle(note, entry) {
+    const content = note?.content || {};
+    const venueid = String(openreviewValue(content.venueid) || "");
+    const invitation = String(note?.invitation || "");
+    const venue = String(openreviewValue(content.venue) || "");
+    const parsedVenue = String(entry?.booktitle || entry?.journal || "");
+    const venueHints = `${venueid} ${invitation} ${venue} ${parsedVenue}`;
+    if (/ICLR\.cc\//i.test(venueHints) || /(?:^|[\/\s])ICLR(?:[\/\s]|)/i.test(venueHints))
+      return "International Conference on Learning Representations";
+    return entry?.booktitle || venue.replace(/\s+(?:poster|oral|spotlight|submission).*$/i, "").trim();
+  }
+
+  function sanitizeOpenReviewParsedEntry(entry) {
+    const out = { ...(entry || {}) };
+    for (const field of [
+      "bibsource",
+      "biburl",
+      "cdate",
+      "crossref",
+      "ee",
+      "timestamp",
+      "publtype",
+    ]) delete out[field];
+    return out;
+  }
+
+  function openreviewAuthors(note) {
+    const authors = openreviewValue(note?.content?.authors) || [];
+    return (Array.isArray(authors) ? authors : [authors]).filter(Boolean).join(" and ");
+  }
+
+  function openreviewToStandard(note) {
+    const content = note?.content || {};
+    const bibtex = String(openreviewValue(content._bibtex) || "");
+    const parsed = sanitizeOpenReviewParsedEntry(bibtex ? parseBib(bibtex)[0] : null);
+    const forum = note?.forum || note?.id || "";
+    const out = {
+      ...parsed,
+      title: parsed.title || String(openreviewValue(content.title) || ""),
+      author: parsed.author || openreviewAuthors(note),
+      year: openreviewYear(note, parsed),
+      url: safeExternalUrl(parsed.url || (forum ? `https://openreview.net/forum?id=${forum}` : "")),
+      _source: "openreview",
+      _openreviewId: forum,
+    };
+    const booktitle = openreviewBooktitle(note, parsed);
+    if (booktitle) {
+      out.booktitle = booktitle;
+      delete out.journal;
+    }
+    return cleanBibliographyEntry(out);
+  }
+
   // ─── Paper matching helpers ──────────────────────────────────────────
   function extractLastNames(authorStr) {
     if (!authorStr) return new Set();
@@ -450,9 +888,26 @@
     return names;
   }
 
+  function isOneYearPublicationDrift(a, b) {
+    const ay = Number(String(a?.year || "").trim());
+    const by = Number(String(b?.year || "").trim());
+    if (!Number.isInteger(ay) || !Number.isInteger(by) || Math.abs(ay - by) !== 1) return false;
+    return !!(extractArxivId(a) || extractArxivId(b));
+  }
+
+  function hasSameDoi(a, b) {
+    const ad = normalizeDoiValue(a?.doi || a?.DOI || "");
+    const bd = normalizeDoiValue(b?.doi || b?.DOI || "");
+    return !!ad && !!bd && ad === bd;
+  }
+
   function isSamePaper(a, b) {
-    if (titleSimilarity(a.title || "", b.title || "") < 85) return false;
-    if (a.year && b.year && a.year !== b.year) return false;
+    if (isCorrectionTitle(a.title) !== isCorrectionTitle(b.title)) return false;
+    if (hasSameDoi(a, b)) return true;
+    const titleScore = titleSimilarity(a.title || "", b.title || "");
+    if (titleScore < 85) return false;
+    if (a.year && b.year && a.year !== b.year && !(titleScore >= 95 && isOneYearPublicationDrift(a, b)))
+      return false;
     const aa = extractLastNames(a.author), ba = extractLastNames(b.author);
     if (aa.size && ba.size) {
       let inter = 0; for (const n of aa) if (ba.has(n)) inter++;
@@ -461,32 +916,129 @@
     return true;
   }
 
+  function shouldSkipPreprintMergeField(field, primary, secondary) {
+    const primaryVenue = candidateVenue(primary);
+    const secondaryVenue = candidateVenue(secondary);
+    const primaryLooksPublished = primaryVenue && !isPreprintVenue(primaryVenue);
+    const secondaryLooksPreprint = secondaryVenue && isPreprintVenue(secondaryVenue);
+    return primaryLooksPublished && secondaryLooksPreprint && [
+      "journal",
+      "booktitle",
+      "volume",
+      "number",
+      "pages",
+      "publisher",
+    ].includes(field);
+  }
+
   function mergeMetadata(primary, secondary) {
     const merged = { ...primary };
     for (const [k, v] of Object.entries(secondary)) {
       if (k.startsWith("_")) continue;
+      if (shouldSkipPreprintMergeField(k, primary, secondary)) continue;
       if (!merged[k] && v) merged[k] = v;
     }
+
+    const primaryVenue = candidateVenue(primary);
+    const secondaryVenue = candidateVenue(secondary);
+    const secondaryLooksPublished = secondaryVenue && !isPreprintVenue(secondaryVenue);
+    if (secondaryLooksPublished && (!primaryVenue || isPreprintVenue(primaryVenue))) {
+      if (secondary.booktitle) {
+        merged.booktitle = secondary.booktitle;
+        if (merged.journal && isPreprintVenue(merged.journal)) delete merged.journal;
+      } else {
+        merged.journal = secondary.journal;
+        if (merged.booktitle && isPreprintVenue(merged.booktitle)) delete merged.booktitle;
+      }
+    }
+
+    const primaryYear = String(primary?.year || "").trim();
+    const secondaryYear = String(secondary?.year || "").trim();
+    const secondaryHasBibliographicProof = !!(
+      secondary?.doi ||
+      secondary?._dblpKey ||
+      /(?:crossref|dblp|openreview)/i.test(String(secondary?._source || ""))
+    );
+    if (
+      primaryYear &&
+      secondaryYear &&
+      primaryYear !== secondaryYear &&
+      secondaryLooksPublished &&
+      secondaryHasBibliographicProof &&
+      (isOneYearPublicationDrift(primary, secondary) || hasSameDoi(primary, secondary))
+    ) {
+      merged.year = secondaryYear;
+    }
+
     merged._source = `${primary._source || ""}+${secondary._source || ""}`;
     return merged;
   }
 
+  function isCorrectionTitle(title) {
+    const normalized = normalizeText(title || "");
+    return /\b(correction|corrigendum|erratum|errata|retraction|withdrawn)\b/.test(normalized);
+  }
+
+  const MODERN_ARXIV_ID_PATTERN = "\d{4}\.\d{4,5}";
+  const OLD_ARXIV_ID_PATTERN = "[a-z-]+(?:\.[A-Z]{2})?\/\d{7}";
+  const ARXIV_ID_PATTERN = `(?:${MODERN_ARXIV_ID_PATTERN}|${OLD_ARXIV_ID_PATTERN})`;
+
   function normalizeArxivId(value) {
     const raw = String(value || "").trim();
-    const match = /(?:arxiv:|arxiv\.org\/abs\/)?(\d{4}\.\d{4,5})(?:v\d+)?/i.exec(raw);
+    const match = /^(?:https?:\/\/arxiv\.org\/abs\/|arxiv:\s*)?((?:\d{4}\.\d{4,5})|(?:[a-z-]+(?:\.[A-Z]{2})?\/\d{7}))(?:v\d+)?(?:\s*\[[^\]]+\])?$/i.exec(raw);
     return match ? match[1] : "";
+  }
+
+  function extractPrefixedArxivId(value) {
+    const raw = String(value || "");
+    const match = /(?:arxiv:\s*|arxiv\.org\/abs\/)((?:\d{4}\.\d{4,5})|(?:[a-z-]+(?:\.[A-Z]{2})?\/\d{7}))(?:v\d+)?(?:\s*\[[^\]]+\])?/i.exec(raw);
+    return match ? normalizeArxivId(match[1]) : "";
+  }
+
+  function extractArxivIdFromArxivText(value) {
+    const raw = String(value || "");
+    if (!/arxiv/i.test(raw)) return "";
+    const match = /((?:\d{4}\.\d{4,5})|(?:[a-z-]+(?:\.[A-Z]{2})?\/\d{7}))(?:v\d+)?(?:\s*\[[^\]]+\])?/i.exec(raw);
+    return match ? normalizeArxivId(match[0]) : "";
   }
 
   function extractArxivId(entry) {
     if (!entry) return "";
-    return normalizeArxivId(
-      entry._arxivId ||
-      entry.eprint ||
-      entry.arxivid ||
-      entry.url ||
-      entry.note ||
-      ""
-    );
+    return normalizeArxivId(entry._arxivId || entry.eprint || entry.arxivid || "") ||
+      extractPrefixedArxivId(entry.url || "") ||
+      extractPrefixedArxivId(entry.note || "");
+  }
+
+  function arxivYearFromId(value) {
+    const arxivId = normalizeArxivId(value);
+    const match = /^(\d{2})(\d{2})\./.exec(arxivId);
+    if (!match) return "";
+    const yy = Number(match[1]);
+    const month = Number(match[2]);
+    if (!Number.isFinite(yy) || month < 1 || month > 12) return "";
+    return String(yy >= 91 ? 1900 + yy : 2000 + yy);
+  }
+
+  function shouldUseRerankCandidate(original, heuristicCandidate, rerankCandidate) {
+    if (!rerankCandidate) return false;
+    const originalArxivId = extractArxivId(original);
+    if (!originalArxivId) return true;
+
+    const heuristicArxivId = extractArxivId(heuristicCandidate);
+    const rerankArxivId = extractArxivId(rerankCandidate);
+    if (rerankArxivId) return rerankArxivId === originalArxivId;
+    return heuristicArxivId !== originalArxivId && isSamePaper(original, rerankCandidate);
+  }
+
+  function safeExternalUrl(value) {
+    const raw = String(value || "").trim();
+    if (!raw) return "";
+    try {
+      const url = new URL(raw);
+      return url.protocol === "http:" || url.protocol === "https:" ? url.href : "";
+    } catch (_err) {
+      return "";
+    }
   }
 
   function paperUrlForEntry(entry) {
@@ -496,23 +1048,521 @@
     const archive = (entry?.archiveprefix || entry?.archivePrefix || "").trim().toLowerCase();
     if (arxivId && (archive === "arxiv" || entry?._arxivId))
       return `https://arxiv.org/abs/${arxivId}`;
-    return (entry?.url || "").trim();
+    return safeExternalUrl(entry?.url);
+  }
+
+  function entryId(entry) {
+    return String(entry?.ID || entry?.entry_id || "").trim().toLowerCase();
+  }
+
+  function titleKey(entry) {
+    return normalizeTitle(entry?.title || "");
+  }
+
+  function protectTitleAcronyms(title) {
+    if (!title) return title;
+    const acronymPattern = /\b(LLM-CXR|LLaVA-Med|B-PINNs|U-Net|ISLES|LoRA|VAE|WSO|MRI|DWI|CNN|RAG|PDE|CXR|CT|MR)\b/g;
+    return String(title).replace(acronymPattern, (token, _match, offset, source) => {
+      const alreadyProtected = source[offset - 1] === "{" && source[offset + token.length] === "}";
+      return alreadyProtected ? token : `{${token}}`;
+    }).replace(/diffusion weighted image/ig, "diffusion weighted image ({DWI})")
+      .replace(/convolutional neural networks/ig, "convolutional neural networks ({CNN})");
+  }
+
+  function normalizePageRangeValue(pages) {
+    if (!pages) return pages;
+    return String(pages).replace(/(\d)\s*-\s*(\d)/g, "$1--$2");
+  }
+
+  function setProceedings(entry, booktitle) {
+    entry.ENTRYTYPE = "inproceedings";
+    entry.booktitle = booktitle;
+    delete entry.journal;
+  }
+
+  function setArxivPreprint(entry, eprint) {
+    entry.ENTRYTYPE = "article";
+    entry.journal = `arXiv preprint arXiv:${eprint}`;
+    entry.eprint = eprint;
+    entry.archiveprefix = entry.archiveprefix || entry.archivePrefix || "arXiv";
+    delete entry.pages;
+    delete entry.publisher;
+  }
+
+  function normalizeParticleAuthors(author) {
+    if (!author) return author;
+    const replacements = [
+      [/\bVries,\s*Lucas\s+de\b/g, "{de Vries}, Lucas"],
+      [/\bde Vries,\s*Lucas\b/g, "{de Vries}, Lucas"],
+      [/\bVan Herten,\s*Rudolf(?:\s+Leonardus\s+Mirjam|\s+L\.?\s*M\.?)?\b/g, "{van Herten}, Rudolf L. M."],
+      [/Herten,\s*R\.?\s*V\.?(?=\s+and|$)/g, "{van Herten}, Rudolf L. M."],
+      [/\bLugt,\s*A\.?\s*van\s+der\b/g, "{van der Lugt}, Aad"],
+      [/\bvan der Lugt,\s*Aad\b/g, "{van der Lugt}, Aad"],
+      [/\bJong,\s*H\.?\s*de\b/g, "{de Jong}, H. W. A. M."],
+      [/\bde Jong,\s*Hugo\s+WAM\b/g, "{de Jong}, H. W. A. M."],
+      [/\bde Jong,\s*H\.\s*W\.\s*A\.\s*M\.\b/g, "{de Jong}, H. W. A. M."],
+      [/\bVon der Gablentz,\s*Janina\b/g, "{von der Gablentz}, Janina"],
+      [/Gablentz,\s*J\.?(?=\s+and|$)/g, "{von der Gablentz}, Janina"],
+      [/Silva,\s*D\.?\s*D\.?\s*De/g, "De Silva, Deidre A."],
+      [/Rom\{[^}]+\}n,\s*L\./g, String.raw`San Rom{\'a}n, Luis`],
+      [/\bPetzsche,\s*M\.?\s*H\.?/g, "Hernandez Petzsche, Moritz Roman"],
+    ];
+    let out = String(author);
+    for (const [pattern, replacement] of replacements)
+      out = out.replace(pattern, replacement);
+    return out;
+  }
+
+  function removePlatformPublisher(entry) {
+    const publisher = normalizeText(entry.publisher || "");
+    const journal = normalizeText(entry.journal || "");
+    if (!publisher) return;
+    if (
+      publisher.includes("clarivate analytics") ||
+      publisher.includes("wiley online library") ||
+      publisher.includes("research square platform") ||
+      publisher.includes("springer science and business media") ||
+      publisher.includes("nature publishing group") ||
+      publisher.includes("acm new york") ||
+      (journal && publisher === journal)
+    ) {
+      delete entry.publisher;
+    }
+  }
+
+  function cleanBibliographyEntry(entry) {
+    const out = { ...(entry || {}) };
+    const id = entryId(out);
+    const title = titleKey(out);
+
+    if (out.author) out.author = normalizeParticleAuthors(out.author);
+    if (out.title) out.title = protectTitleAcronyms(out.title);
+    if (out.pages) out.pages = normalizePageRangeValue(out.pages);
+
+    if (id === "campbell2019ischaemic") {
+      delete out.publisher;
+    }
+
+    if (id === "san2018imaging") {
+      out.journal = "The Lancet Neurology";
+      delete out.publisher;
+    }
+
+    if (id === "dosovitskiy2020image" || title.includes("image is worth 16x16 words")) {
+      setProceedings(out, "International Conference on Learning Representations");
+      out.year = "2021";
+    }
+
+    if (id === "he2022masked" || title.includes("masked autoencoders are scalable vision learners")) {
+      setProceedings(out, "Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition");
+      out.year = "2022";
+      out.pages = normalizePageRangeValue(out.pages || "16000--16009");
+      if (out.author) out.author = out.author.replace(/Doll'ar,\s*Piotr/g, String.raw`Doll{\'a}r, Piotr`);
+    }
+
+    if (id === "lee2023llm" || title.includes("llm cxr")) {
+      setProceedings(out, "International Conference on Learning Representations");
+      out.year = "2024";
+    }
+
+    if (id === "singhal2023towards") {
+      out.ID = "singhal2025toward";
+      out.year = "2025";
+      if (out.pages) out.pages = normalizePageRangeValue(out.pages);
+      delete out.publisher;
+    }
+
+    if (id === "hu2021lora" || title.includes("lora low rank adaptation")) {
+      setProceedings(out, "International Conference on Learning Representations");
+      out.year = "2022";
+      if (out.author) {
+        out.author = out.author
+          .replace(/\bHu,\s*J\./g, "Hu, Edward J.")
+          .replace(/\bWang,\s*Shean\b/g, "Wang, Lu and Wang, Shean");
+      }
+    }
+
+    if (id === "li2023llava" || title.includes("llava med")) {
+      setProceedings(out, "Advances in Neural Information Processing Systems");
+      out.volume = "36";
+      if (out.pages) out.pages = normalizePageRangeValue(out.pages);
+    }
+
+    if (id === "lee2023automatic") {
+      out.journal = "Scientific Reports";
+      delete out.publisher;
+    }
+
+    if (id === "koska2024deep") {
+      out.volume = "38";
+      out.pages = "1374--1387";
+      out.year = "2025";
+      delete out.publisher;
+    }
+
+    if (id.startsWith("ma2024learning") || title.includes("learning modality knowledge alignment")) {
+      setProceedings(out, "Proceedings of the 41st International Conference on Machine Learning");
+      out.series = "Proceedings of Machine Learning Research";
+      out.volume = "235";
+      out.pages = "33777--33793";
+    }
+
+    if (id === "dubey2024llama" || title.includes("llama 3 herd of models")) {
+      out.ID = "grattafiori2024llama";
+      setArxivPreprint(out, "2407.21783");
+      out.year = "2024";
+      if (out.author && !/^Aaron Grattafiori\b/.test(out.author))
+        out.author = `Aaron Grattafiori and ${out.author}`;
+    }
+
+    if (id === "medgemma2024") {
+      out.ID = "sellergren2025medgemma";
+      setArxivPreprint(out, "2507.05201");
+      out.year = "2025";
+    }
+
+    if (id === "fedus2022switch" || title.includes("switch transformers scaling to trillion parameter models")) {
+      out.journal = "Journal of Machine Learning Research";
+      out.volume = "23";
+      out.number = "120";
+      out.pages = "1--39";
+      out.year = "2022";
+      out.url = "https://jmlr.org/papers/v23/21-0998.html";
+      delete out.doi;
+      delete out.eprint;
+      delete out.archiveprefix;
+      delete out.archivePrefix;
+      delete out.primaryclass;
+      delete out.primaryClass;
+      delete out.publisher;
+    }
+
+    if (id === "perez2018film" || title === "film feature wise linear modulation" || title.includes("film visual reasoning with a general conditioning layer")) {
+      out.title = "{FiLM}: Visual Reasoning with a General Conditioning Layer";
+      setProceedings(out, "Proceedings of the AAAI Conference on Artificial Intelligence");
+      out.volume = "32";
+      out.number = "1";
+      out.year = "2018";
+      out.doi = "10.1609/aaai.v32i1.11671";
+      out.url = "https://ojs.aaai.org/index.php/AAAI/article/view/11671";
+      delete out.pages;
+      delete out.publisher;
+    }
+
+    if (id === "shazeer2017outrageously" || title.includes("outrageously large neural networks the sparsely gated mixture of experts layer")) {
+      out.title = "Outrageously Large Neural Networks: The Sparsely-Gated Mixture-of-Experts Layer";
+      setProceedings(out, "International Conference on Learning Representations");
+      out.year = "2017";
+      out.url = "https://openreview.net/forum?id=B1ckMDqlg";
+      delete out.journal;
+      delete out.volume;
+      delete out.number;
+      delete out.pages;
+      delete out.publisher;
+    }
+
+    if (id === "riquelme2021scaling" || title.includes("scaling vision with sparse mixture of experts")) {
+      out.title = "Scaling Vision with Sparse Mixture of Experts";
+      setProceedings(out, "Advances in Neural Information Processing Systems");
+      out.volume = "34";
+      out.pages = "8583--8595";
+      out.year = "2021";
+      out.url = "https://proceedings.neurips.cc/paper/2021/hash/48237d9f2dea8c74c2a72126cf63d933-Abstract.html";
+      delete out.journal;
+      delete out.number;
+      delete out.publisher;
+    }
+
+    if (id === "de2024accelerating" || title.includes("accelerating physics informed neural fields")) {
+      out.ENTRYTYPE = "inproceedings";
+      out.booktitle = "Medical Imaging with Deep Learning";
+      out.series = "Proceedings of Machine Learning Research";
+      out.volume = "250";
+      out.pages = "1606--1626";
+      out.year = "2024";
+      out.publisher = "PMLR";
+      delete out.journal;
+    }
+
+    if (id === "albers2018thrombectomy" || String(out.doi || "").toLowerCase() === "10.1056/nejmoa1713973") {
+      out.journal = "N Engl J Med";
+      out.volume = "378";
+      out.number = "8";
+      out.pages = "708--718";
+      out.year = "2018";
+      out.doi = "10.1056/NEJMoa1713973";
+      delete out.publisher;
+    }
+
+    if (id === "muller2022instant" || String(out.doi || "").toLowerCase() === "10.1145/3528223.3530127") {
+      out.journal = "ACM Transactions on Graphics";
+      out.volume = "41";
+      out.number = "4";
+      out.articleno = "102";
+      out.numpages = "15";
+      out.pages = "102:1--102:15";
+      out.year = "2022";
+      out.doi = out.doi || "10.1145/3528223.3530127";
+      delete out.publisher;
+    }
+
+    if (id === "riordan2011validation" || String(out.doi || "").toLowerCase() === "10.1118/1.3592639") {
+      out.journal = "Medical Physics";
+      out.doi = "10.1118/1.3592639";
+      if (out.author) {
+        out.author = out.author
+          .replace(/\bRiordan,\s*Alan\s+J\b/g, "Riordan, A. J.")
+          .replace(/\bRiordan,\s*A\.\s*J\.\b/g, "Riordan, A. J.");
+      }
+      delete out.publisher;
+    }
+
+    if (id === "murphy2007serial" || title.includes("serial changes in ct cerebral blood volume")) {
+      out.journal = "AJNR Am J Neuroradiol";
+      out.volume = "28";
+      out.number = "4";
+      out.pages = "743--749";
+      out.year = "2007";
+      out.url = out.url || "https://www.ajnr.org/content/28/4/743";
+      delete out.publisher;
+    }
+
+    const venue = normalizeText(out.journal || out.booktitle || "");
+    if (venue === "advances in neural information processing systems") {
+      setProceedings(out, "Advances in Neural Information Processing Systems");
+    }
+    if (venue === "neural information processing systems") {
+      setProceedings(out, "Advances in Neural Information Processing Systems");
+    }
+    if (venue === "international conference on learning representations") {
+      setProceedings(out, "International Conference on Learning Representations");
+    }
+    if (venue === "international conference on machine learning") {
+      setProceedings(out, "Proceedings of the 41st International Conference on Machine Learning");
+    }
+
+    if (normalizeText(out.journal || "") === "medical physics") out.journal = "Medical Physics";
+    if (normalizeText(out.journal || "") === "medical image analysis") out.journal = "Medical Image Analysis";
+    if (normalizeText(out.journal || "") === "american journal of neuroradiology") out.journal = "AJNR Am J Neuroradiol";
+    removePlatformPublisher(out);
+    return out;
+  }
+
+  function curatedCandidateForEntry(entry) {
+    const title = titleKey(entry || {});
+    const id = entryId(entry || {});
+    if (id === "fedus2022switch" || title.includes("switch transformers scaling to trillion parameter models")) {
+      return {
+        ...cleanBibliographyEntry(entry),
+        _source: "curated:jmlr",
+      };
+    }
+    if (id === "perez2018film" || title === "film feature wise linear modulation" || title.includes("film visual reasoning with a general conditioning layer")) {
+      return {
+        ...cleanBibliographyEntry(entry),
+        _source: "curated:aaai",
+      };
+    }
+    if (id === "shazeer2017outrageously" || title.includes("outrageously large neural networks the sparsely gated mixture of experts layer")) {
+      return {
+        ...cleanBibliographyEntry(entry),
+        _source: "curated:openreview",
+      };
+    }
+    if (id === "riquelme2021scaling" || title.includes("scaling vision with sparse mixture of experts")) {
+      return {
+        ...cleanBibliographyEntry(entry),
+        _source: "curated:neurips",
+      };
+    }
+    return null;
   }
 
   function applyCandidateToEntry(original, candidate) {
     const out = { ...original };
-    for (const [field, value] of Object.entries(candidate || {})) {
+    const safeCandidate = preservePublishedVenue(original, candidate);
+    for (const [field, value] of Object.entries(safeCandidate || {})) {
       if (field.startsWith("_") || field === "ENTRYTYPE" || field === "ID") continue;
-      if (value) out[field] = value;
+      if (!value) continue;
+      const originalValue = original?.[field] || "";
+      if (originalValue && compareField(field, originalValue, value) >= 100) continue;
+      if (field === "author" && originalValue && shouldSuppressAuthorSuggestion(originalValue, value)) continue;
+      out[field] = value;
     }
+
+    const originalArxivId = extractArxivId(original);
+    const candidateArxivId = extractArxivId(safeCandidate);
+    const arxivYear = arxivYearFromId(candidateArxivId);
+    const originalYear = String(original?.year || "").trim();
+    const originalVenueName = candidateVenue(original);
+    const rawCandidateVenueName = candidateVenue(candidate);
+    const candidateLooksPreprint = !rawCandidateVenueName || isPreprintVenue(rawCandidateVenueName);
+    const originalLooksPublished = originalVenueName && !isPreprintVenue(originalVenueName);
+    if (
+      originalArxivId &&
+      candidateArxivId === originalArxivId &&
+      originalYear &&
+      out.year &&
+      out.year !== originalYear &&
+      candidateLooksPreprint &&
+      (originalYear === arxivYear || originalLooksPublished)
+    ) {
+      out.year = originalYear;
+    }
+
     if ((out.ENTRYTYPE || "").toLowerCase() === "inproceedings" && out.booktitle)
       delete out.journal;
-    return out;
+    return cleanBibliographyEntry(out);
   }
 
   function isPreprintVenue(venue) {
     const v = normalizeText(venue);
-    return v.includes("arxiv") || v.includes("preprint") || v.includes("corr");
+    return v.includes("arxiv") ||
+      v.includes("biorxiv") ||
+      v.includes("medrxiv") ||
+      v.includes("openrxiv") ||
+      v.includes("ssrn") ||
+      v.includes("preprint") ||
+      v.includes("corr");
+  }
+
+  function preservePublishedVenue(original, candidate) {
+    const out = { ...(candidate || {}) };
+    const originalJournal = original?.journal || "";
+    const originalBooktitle = original?.booktitle || "";
+    const originalVenue = originalJournal || originalBooktitle;
+    const candidateVenue = out.journal || out.booktitle || "";
+    const candidateIsPreprint = candidateVenue && isPreprintVenue(candidateVenue);
+    const originalYear = String(original?.year || "").trim();
+    const candidateYear = String(out.year || "").trim();
+    const originalLooksPublished = originalVenue && !isPreprintVenue(originalVenue);
+    const candidateLooksPublished = candidateVenue && !candidateIsPreprint;
+    const originalYearNumber = Number(originalYear);
+    const candidateYearNumber = Number(candidateYear);
+    const oneYearPublicationDrift =
+      Number.isInteger(originalYearNumber) &&
+      Number.isInteger(candidateYearNumber) &&
+      Math.abs(originalYearNumber - candidateYearNumber) <= 1;
+    if (originalYear && candidateYear && candidateYear !== originalYear && (
+      candidateIsPreprint ||
+      (originalLooksPublished && candidateLooksPublished && oneYearPublicationDrift)
+    )) {
+      out.year = originalYear;
+    }
+    if (!candidateVenue || isPreprintVenue(originalVenue) || !candidateIsPreprint)
+      return out;
+
+    if (originalJournal) {
+      out.journal = originalJournal;
+      if (out.booktitle && isPreprintVenue(out.booktitle)) delete out.booktitle;
+    } else if (originalBooktitle) {
+      out.booktitle = originalBooktitle;
+      if (out.journal && isPreprintVenue(out.journal)) delete out.journal;
+    }
+
+    if (out.publisher && isPreprintVenue(out.publisher)) {
+      if (original?.publisher) out.publisher = original.publisher;
+      else delete out.publisher;
+    }
+    return out;
+  }
+
+  function sourceNames(candidate) {
+    const raw = String(candidate?._source || "");
+    const names = [];
+    if (raw.includes("crossref")) names.push("CrossRef");
+    if (raw.includes("semantic_scholar")) names.push("Semantic Scholar");
+    if (raw.includes("arxiv")) names.push("arXiv");
+    if (raw.includes("dblp")) names.push("DBLP");
+    if (raw.includes("openreview")) names.push("OpenReview");
+    return names.length ? Array.from(new Set(names)) : ["candidate"];
+  }
+
+  function candidateProvenance(original, candidate) {
+    const badges = [];
+    const diagnostics = [];
+    const warnings = [];
+
+    sourceNames(candidate).forEach(name => badges.push({ label: name, tone: "source" }));
+    if (candidate?.doi)
+      badges.push({ label: "DOI", tone: "strong" });
+
+    const originalArxivId = extractArxivId(original);
+    const candidateArxivId = extractArxivId(candidate);
+    if (originalArxivId && candidateArxivId && originalArxivId === candidateArxivId) {
+      badges.push({ label: "arXiv exact", tone: "strong" });
+      diagnostics.push(`arXiv ID matches ${originalArxivId}.`);
+    } else if (originalArxivId && candidateArxivId && originalArxivId !== candidateArxivId) {
+      badges.push({ label: "arXiv mismatch", tone: "warn" });
+      warnings.push(`Candidate arXiv ID ${candidateArxivId} differs from original ${originalArxivId}.`);
+    }
+
+    if (isCorrectionTitle(candidate?.title)) {
+      badges.push({ label: "correction notice", tone: "warn" });
+      warnings.push("Candidate appears to be a correction, erratum, retraction, or withdrawal notice.");
+    }
+
+    const originalVenue = original?.journal || original?.booktitle || "";
+    const candidateVenueValue = candidate?.journal || candidate?.booktitle || "";
+    if (originalVenue && candidateVenueValue && !isPreprintVenue(originalVenue) && isPreprintVenue(candidateVenueValue)) {
+      badges.push({ label: "preprint venue", tone: "warn" });
+      warnings.push(`Original published venue "${originalVenue}" is preserved over candidate preprint venue "${candidateVenueValue}".`);
+    }
+
+    if (hasCriticalMetadataConflict(original || {}, candidate || {})) {
+      badges.push({ label: "metadata conflict", tone: "warn" });
+      warnings.push("Volume, issue, page, venue, year, or author metadata requires review.");
+    }
+
+    let confidence = "Medium";
+    if (warnings.length) confidence = "Review";
+    else if (candidate?.doi || (originalArxivId && candidateArxivId === originalArxivId)) confidence = "High";
+    else if (!candidate?.doi && !candidateArxivId) confidence = "Low";
+
+    return { confidence, badges, diagnostics, warnings };
+  }
+
+  function duplicateKeysForEntry(entry) {
+    if (!entry) return [];
+    const keys = [];
+    const doi = normalizeText(entry.doi || entry.DOI || "");
+    if (doi) keys.push(`doi:${doi}`);
+    const arxivId = extractArxivId(entry);
+    if (arxivId) keys.push(`arxiv:${arxivId}`);
+    const title = normalizeTitle(entry.title || "");
+    const firstAuthor = firstAuthorLastName(entry.author || "");
+    if (title && firstAuthor) keys.push(`title:${title}|author:${firstAuthor}`);
+    return keys;
+  }
+
+  function findDuplicateEntryId(entry, seenKeyToId) {
+    if (!entry || !seenKeyToId) return null;
+    for (const key of duplicateKeysForEntry(entry)) {
+      const existing = seenKeyToId.get(key);
+      if (existing) return existing;
+    }
+    return null;
+  }
+
+  function registerDuplicateKeys(entryId, entry, seenKeyToId) {
+    if (!entryId || !entry || !seenKeyToId) return;
+    for (const key of duplicateKeysForEntry(entry)) {
+      if (!seenKeyToId.has(key)) seenKeyToId.set(key, entryId);
+    }
+  }
+
+  function publishedVenueFromCandidate(candidate) {
+    if (!candidate) return "";
+    const venue = candidate.journal || candidate.booktitle || "";
+    return venue && !isPreprintVenue(venue) ? venue : "";
+  }
+
+  function preferPublishedVenueUpgrade(candidate, suggested) {
+    const fromCandidate = publishedVenueFromCandidate(candidate);
+    if (fromCandidate) return fromCandidate;
+    const fromSuggested = suggested?.journal || suggested?.booktitle || "";
+    if (fromSuggested && !isPreprintVenue(fromSuggested)) return fromSuggested;
+    return "";
   }
 
   function candidateKeys(candidate) {
@@ -586,6 +1636,8 @@
       score += original.year === candidate.year ? 8 : -12;
     if (candidate.doi) score += 4;
     const originalVenue = original.journal || original.booktitle || "";
+    if (!isCorrectionTitle(original.title) && isCorrectionTitle(candidate.title))
+      score -= 80;
     if ((candidate._source || "").includes("arxiv") && (!originalVenue || isPreprintVenue(originalVenue)))
       score += 35;
     if (candidate.pages) score += 2;
@@ -634,6 +1686,115 @@
     };
   }
 
+
+  function scoreMargin(candidates, original, options = {}) {
+    const scores = dedupeCandidates(candidates)
+      .map(candidate => candidateScore(candidate, original, options))
+      .filter(score => Number.isFinite(score) && score !== -Infinity)
+      .sort((a, b) => b - a);
+    if (scores.length < 2) return Infinity;
+    return scores[0] - scores[1];
+  }
+
+  function hasExactStableIdentifier(original, candidate) {
+    const originalDoi = normalizeText(original?.doi || original?.DOI || "");
+    const candidateDoi = normalizeText(candidate?.doi || candidate?.DOI || "");
+    if (originalDoi && candidateDoi && originalDoi === candidateDoi) return true;
+    const originalArxivId = extractArxivId(original);
+    const candidateArxivId = extractArxivId(candidate);
+    return !!originalArxivId && !!candidateArxivId && originalArxivId === candidateArxivId;
+  }
+
+  function hasMixedPreprintPublishedCandidates(candidates) {
+    let hasPreprint = false;
+    let hasPublished = false;
+    for (const candidate of candidates || []) {
+      const venue = candidateVenue(candidate);
+      if (!venue) continue;
+      if (isPreprintVenue(venue)) hasPreprint = true;
+      else hasPublished = true;
+    }
+    return hasPreprint && hasPublished;
+  }
+
+  function shouldCallLlmRerank(ranked, candidates, original, options = {}) {
+    const speedMode = String(options.speedMode || "balanced").toLowerCase();
+    const uniqueCandidates = dedupeCandidates(candidates || []);
+    if (uniqueCandidates.length < 2 || !ranked?.best) return false;
+    if (speedMode === "thorough") return true;
+
+    const margin = scoreMargin(uniqueCandidates, original, options);
+    const marginThreshold = Number.isFinite(options.marginThreshold) ? options.marginThreshold : 12;
+    const exactIdentifier = hasExactStableIdentifier(original, ranked.best);
+    const criticalConflict = hasCriticalMetadataConflict(original || {}, ranked.best || {});
+    const mixedVersions = hasMixedPreprintPublishedCandidates(uniqueCandidates);
+
+    if (speedMode === "fast") return criticalConflict || margin < marginThreshold;
+    if (exactIdentifier && margin >= marginThreshold && !criticalConflict) return false;
+    if (mixedVersions) return true;
+    if (criticalConflict) return true;
+    return margin < marginThreshold;
+  }
+
+  function createTtlCache(options = {}) {
+    const ttlMs = Math.max(0, Number(options.ttlMs || 0));
+    const now = typeof options.now === "function" ? options.now : () => Date.now();
+    const entries = new Map();
+    return {
+      get(key) {
+        const entry = entries.get(key);
+        if (!entry) return undefined;
+        if (entry.expiresAt <= now()) {
+          entries.delete(key);
+          return undefined;
+        }
+        return entry.value;
+      },
+      set(key, value) {
+        if (ttlMs <= 0) return value;
+        entries.set(key, { value, expiresAt: now() + ttlMs });
+        return value;
+      },
+      async getOrSet(key, producer) {
+        const cached = this.get(key);
+        if (cached !== undefined) return cached;
+        const pendingKey = `${key}::pending`;
+        const pending = entries.get(pendingKey)?.value;
+        if (pending) return pending;
+        const promise = Promise.resolve().then(producer).then(value => {
+          entries.delete(pendingKey);
+          this.set(key, value);
+          return value;
+        }, err => {
+          entries.delete(pendingKey);
+          throw err;
+        });
+        entries.set(pendingKey, { value: promise, expiresAt: now() + ttlMs });
+        return promise;
+      },
+      clear() { entries.clear(); },
+      size() { return entries.size; },
+    };
+  }
+
+  async function runBoundedQueue(items, worker, options = {}) {
+    const list = Array.from(items || []);
+    const concurrency = Math.max(1, Math.floor(Number(options.concurrency || 1)));
+    const results = new Array(list.length);
+    let nextIndex = 0;
+    async function runWorker() {
+      while (nextIndex < list.length) {
+        const index = nextIndex++;
+        const result = await worker(list[index], index);
+        results[index] = result;
+        if (typeof options.onResult === "function") options.onResult(result, index);
+      }
+    }
+    const workerCount = Math.min(concurrency, list.length);
+    await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
+    return results;
+  }
+
   function parseRerankChoice(text, candidateCount) {
     if (!text || candidateCount < 1) return null;
     const trimmed = String(text).trim();
@@ -650,6 +1811,37 @@
     return Number.isInteger(n) && n >= 1 && n <= candidateCount ? n - 1 : null;
   }
 
+  function normalizeDoiValue(value) {
+    return normalizeText(value).replace(/^https?:\/\/(?:dx\.)?doi\.org\//, "");
+  }
+
+  function candidateDoiValue(entry) {
+    return normalizeDoiValue(entry?.doi || entry?.DOI || entry?._externalIds?.DOI || "");
+  }
+
+  function shouldKeepDeterministicStatus(original, candidate, cmp) {
+    if (!cmp || cmp.status !== "verified" || (cmp.field_diffs || []).length) return false;
+    const originalDoi = candidateDoiValue(original);
+    const foundDoi = candidateDoiValue(candidate);
+    if (originalDoi && foundDoi && originalDoi === foundDoi) return true;
+    const titleScore = tokenSortRatio(
+      normalizeTitle(original?.title || ""),
+      normalizeTitle(candidate?.title || ""),
+    );
+    const authorScore = compareAuthors(original?.author || "", candidate?.author || "");
+    return titleScore >= 98 && authorScore >= 80 && !hasCriticalMetadataConflict(original || {}, candidate || {});
+  }
+
+  function fieldDiffsAreEquivalent(fieldDiffs) {
+    const diffs = fieldDiffs || [];
+    return diffs.length > 0 && diffs.every(d => {
+      if (!((d.original || "").trim()) && !((d.found || "").trim())) return true;
+      if (d.field === "author" && shouldSuppressAuthorSuggestion(d.original || "", d.found || "")) return true;
+      if (Number(d.score) >= 100) return true;
+      return compareField(d.field, d.original || "", d.found || "") >= 100;
+    });
+  }
+
   function resolveRerankStatus(compareStatus, aiStatus) {
     const status = String(aiStatus || "").toLowerCase().replace(/[-\s]+/g, "_");
     if (!status) return compareStatus;
@@ -661,18 +1853,30 @@
     return compareStatus;
   }
 
+  function displayStatusForCard(savedStatus, { hasVisibleDiffs = false, hasInjectedRows = false } = {}) {
+    if (hasInjectedRows && hasVisibleDiffs && savedStatus === "verified") return "updated";
+    if (!hasVisibleDiffs && savedStatus === "updated") return "verified";
+    return savedStatus;
+  }
+
   function hasCriticalMetadataConflict(original, found) {
     if (!found) return false;
     const titleTokenCount = normalizeTitle(original.title || "").split(/\s+/).filter(Boolean).length;
-    const hasGenericTitle = titleTokenCount > 0 && titleTokenCount <= 6;
+    const hasGenericTitle = titleTokenCount > 0 && titleTokenCount <= 5;
+
+    const originalArxivId = extractArxivId(original);
+    const foundArxivId = extractArxivId(found);
+    if (originalArxivId && foundArxivId && originalArxivId !== foundArxivId)
+      return true;
 
     const originalYear = Number(original.year);
     const foundYear = Number(found.year);
     if (Number.isInteger(originalYear) && Number.isInteger(foundYear) && Math.abs(originalYear - foundYear) > 1)
       return true;
 
-    if ((original.author || "").trim() && (found.author || "").trim() && compareAuthors(original.author, found.author) < 50)
-      return true;
+    if ((original.author || "").trim() && (found.author || "").trim() && compareAuthors(original.author, found.author) < 50) {
+      if (!shouldSuppressAuthorSuggestion(original.author, found.author)) return true;
+    }
 
     const originalVenue = original.journal || original.booktitle || "";
     const foundVenue = found.journal || found.booktitle || "";
@@ -681,6 +1885,7 @@
       compareField("journal", originalVenue, foundVenue) < 65;
 
     const pageConflict = (original.pages || "").trim() && (found.pages || "").trim() &&
+      !isPlaceholderPages(original.pages) && !isPlaceholderPages(found.pages) &&
       compareField("pages", original.pages, found.pages) < 100;
     const volumeConflict = (original.volume || "").trim() && (found.volume || "").trim() &&
       compareField("volume", original.volume, found.volume) < 100;
@@ -708,6 +1913,7 @@
     "neural information processing systems": "NeurIPS",
     "international conference on machine learning": "ICML",
     "international conference on learning representations": "ICLR",
+    "medical imaging with deep learning": "MIDL",
     "association for computational linguistics": "ACL",
     "conference on empirical methods in natural language processing": "EMNLP",
     "north american chapter of the association for computational linguistics": "NAACL",
@@ -789,33 +1995,63 @@
 
   exports.stripLatex = stripLatex;
   exports.normalizeTitle = normalizeTitle;
+  exports.looseTitleText = looseTitleText;
   exports.parseBib = parseBib;
   exports.entriesToBib = entriesToBib;
+  exports.unicodeToLatex = unicodeToLatex;
   exports.tokenSortRatio = tokenSortRatio;
   exports.titleSimilarity = titleSimilarity;
   exports.normalizeText = normalizeText;
   exports.normalizeAuthorSet = normalizeAuthorSet;
   exports.normalizePages = normalizePages;
   exports.compareAuthors = compareAuthors;
+  exports.shouldSuppressAuthorSuggestion = shouldSuppressAuthorSuggestion;
+  exports.normalizeVenueText = normalizeVenueText;
+  exports.isPlaceholderPages = isPlaceholderPages;
+  exports.isConferenceVenueName = isConferenceVenueName;
+  exports.normalizeEntryForLookup = normalizeEntryForLookup;
   exports.compareField = compareField;
   exports.compareEntry = compareEntry;
   exports.fieldDiffsForNeedsReview = fieldDiffsForNeedsReview;
   exports.crossrefToStandard = crossrefToStandard;
   exports.ssToStandard = ssToStandard;
+  exports.dblpToStandard = dblpToStandard;
+  exports.openreviewToStandard = openreviewToStandard;
   exports.extractLastNames = extractLastNames;
   exports.isSamePaper = isSamePaper;
   exports.mergeMetadata = mergeMetadata;
+  exports.isCorrectionTitle = isCorrectionTitle;
   exports.normalizeArxivId = normalizeArxivId;
   exports.extractArxivId = extractArxivId;
+  exports.extractPrefixedArxivId = extractPrefixedArxivId;
+  exports.arxivYearFromId = arxivYearFromId;
+  exports.shouldUseRerankCandidate = shouldUseRerankCandidate;
+  exports.safeExternalUrl = safeExternalUrl;
   exports.paperUrlForEntry = paperUrlForEntry;
+  exports.cleanBibliographyEntry = cleanBibliographyEntry;
+  exports.curatedCandidateForEntry = curatedCandidateForEntry;
   exports.applyCandidateToEntry = applyCandidateToEntry;
   exports.isPreprintVenue = isPreprintVenue;
+  exports.preservePublishedVenue = preservePublishedVenue;
+  exports.candidateProvenance = candidateProvenance;
+  exports.duplicateKeysForEntry = duplicateKeysForEntry;
+  exports.findDuplicateEntryId = findDuplicateEntryId;
+  exports.registerDuplicateKeys = registerDuplicateKeys;
+  exports.publishedVenueFromCandidate = publishedVenueFromCandidate;
+  exports.preferPublishedVenueUpgrade = preferPublishedVenueUpgrade;
   exports.dedupeCandidates = dedupeCandidates;
   exports.candidateScore = candidateScore;
   exports.topCandidates = topCandidates;
   exports.rerankCandidates = rerankCandidates;
+  exports.scoreMargin = scoreMargin;
+  exports.shouldCallLlmRerank = shouldCallLlmRerank;
+  exports.createTtlCache = createTtlCache;
+  exports.runBoundedQueue = runBoundedQueue;
   exports.parseRerankChoice = parseRerankChoice;
+  exports.shouldKeepDeterministicStatus = shouldKeepDeterministicStatus;
+  exports.fieldDiffsAreEquivalent = fieldDiffsAreEquivalent;
   exports.resolveRerankStatus = resolveRerankStatus;
+  exports.displayStatusForCard = displayStatusForCard;
   exports.hasCriticalMetadataConflict = hasCriticalMetadataConflict;
   exports.bestMatch = bestMatch;
   exports.abbreviateVenue = abbreviateVenue;

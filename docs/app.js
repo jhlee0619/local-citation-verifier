@@ -4,14 +4,68 @@
   const B = window.BibLib;
 
   // ─── Configuration ───────────────────────────────────────────────────
-  const CROSSREF_API = "https://api.crossref.org/works";
-  const SS_MATCH = "https://api.semanticscholar.org/graph/v1/paper/search/match";
-  const SS_SEARCH = "https://api.semanticscholar.org/graph/v1/paper/search";
+  function useMetadataProxy() {
+    if (typeof window === "undefined" || !window.location) return false;
+    const { hostname, protocol } = window.location;
+    if (protocol === "file:") return false;
+    return !hostname.endsWith(".github.io");
+  }
+
+  const USE_METADATA_PROXY = useMetadataProxy();
+  const CROSSREF_API = USE_METADATA_PROXY ? "/api/crossref/works" : "https://api.crossref.org/works";
+  const SS_MATCH = USE_METADATA_PROXY
+    ? "/api/semanticscholar/graph/v1/paper/search/match"
+    : "https://api.semanticscholar.org/graph/v1/paper/search/match";
+  const SS_SEARCH = USE_METADATA_PROXY
+    ? "/api/semanticscholar/graph/v1/paper/search"
+    : "https://api.semanticscholar.org/graph/v1/paper/search";
+  const DBLP_API = USE_METADATA_PROXY ? "/api/dblp/search/publ/api" : "https://dblp.org/search/publ/api";
+  const OPENREVIEW_API = USE_METADATA_PROXY ? "/api/openreview/notes/search" : "";
   const SS_FIELDS = "title,authors,year,venue,publicationVenue,externalIds";
   const LOCAL_ARXIV_BIBTEX = "/api/arxiv/bibtex";
   const MAX_RETRIES = 4;
   const RETRY_BASE_MS = 1500;
   const MAX_CANDIDATE_CHOICES = 3;
+  const EVIDENCE_LANGUAGE_STORAGE = "bv-evidence-language";
+  const SPEED_MODE_STORAGE = "bv-speed-mode";
+  const METADATA_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+  const ARXIV_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+  const metadataCache = B.createTtlCache({ ttlMs: METADATA_CACHE_TTL_MS });
+  const arxivCache = B.createTtlCache({ ttlMs: ARXIV_CACHE_TTL_MS });
+
+  const EVIDENCE_TEXT = {
+    en: {
+      reviewPrefix: "The closest database record may not be the paper you meant",
+      reviewMiddle: "title similarity to",
+      reviewAction: "Review the suggestions below and use the checkmark on each row to adopt a value, or keep your original text.",
+      localLlmReason: " Local LLM reason: ",
+      notFoundWithTitle: "No matching publication was found in CrossRef, Semantic Scholar, DBLP, or OpenReview for this title. Try fixing typos or adding missing words, then re-run verification, or check the reference manually.",
+      notFoundNoTitle: "This entry has no title, so it cannot be looked up automatically. Add a title in your .bib file or verify the entry by hand.",
+      lookupFailed: "Publication lookup failed before the databases could answer. This is usually rate limiting or an upstream outage, not evidence that the paper is missing. Re-run verification later.",
+    },
+    ko: {
+      reviewPrefix: "가장 가까운 데이터베이스 기록이 의도한 논문과 다를 수 있습니다",
+      reviewMiddle: "제목 유사도:",
+      reviewAction: "아래 제안을 검토한 뒤 각 행의 값을 채택하거나 원래 값을 유지하세요.",
+      localLlmReason: " 로컬 LLM 근거: ",
+      notFoundWithTitle: "CrossRef, Semantic Scholar, DBLP 또는 OpenReview에서 이 제목과 일치하는 출판물을 찾지 못했습니다. 오타나 누락된 단어를 고친 뒤 다시 검증하거나 직접 확인하세요.",
+      notFoundNoTitle: "이 항목에는 title이 없어 자동 조회할 수 없습니다. .bib 파일에 title을 추가하거나 직접 확인하세요.",
+      lookupFailed: "데이터베이스가 응답하기 전에 조회가 실패했습니다. 보통 rate limit 또는 upstream 장애이며, 논문이 없다는 뜻은 아닙니다. 잠시 뒤 다시 실행하세요.",
+    },
+  };
+
+  function normalizeEvidenceLanguage(value) {
+    const lang = String(value || "").toLowerCase();
+    return lang === "ko" || lang === "kor" || lang === "korean" ? "ko" : "en";
+  }
+
+  function tEvidence(key, params = {}) {
+    const lang = getEvidenceLanguage();
+    let text = (EVIDENCE_TEXT[lang] || EVIDENCE_TEXT.en)[key] || EVIDENCE_TEXT.en[key] || "";
+    for (const [name, value] of Object.entries(params))
+      text = text.replaceAll(`{${name}}`, String(value ?? ""));
+    return text;
+  }
 
   // ─── Adaptive rate controller ──────────────────────────────────────
   const rateState = {
@@ -54,11 +108,30 @@
   // ─── Network ─────────────────────────────────────────────────────────
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+  function isTransientHttpStatus(status) {
+    return status === 429 || status === 502 || status === 503 || status === 504;
+  }
+
+  function retryDelayMs(resp, attempt) {
+    const retryAfter = resp?.headers?.get?.("Retry-After");
+    const seconds = Number(retryAfter);
+    if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
+    return RETRY_BASE_MS * Math.pow(2, attempt);
+  }
+
+  function makeLookupError(kind, status, message) {
+    const err = new Error(message);
+    err.name = "LookupError";
+    err.kind = kind;
+    err.status = status;
+    return err;
+  }
+
   async function fetchJSON(url, params, { retries = MAX_RETRIES, is404Ok = false } = {}) {
-    const u = new URL(url);
+    const u = new URL(url, window.location.origin);
     for (const [k, v] of Object.entries(params)) u.searchParams.set(k, v);
 
-    const isSS = url.includes("semanticscholar.org");
+    const isSS = url.includes("semanticscholar.org") || url.startsWith("/api/semanticscholar");
     const source = isSS ? "ss" : "cr";
     const delay = isSS ? rateState.ssDelay : rateState.crDelay;
     const lastKey = isSS ? "lastSSTime" : "lastCRTime";
@@ -74,18 +147,21 @@
           return resp.json();
         }
         if (resp.status === 404 && is404Ok) return null;
-        if (resp.status === 429) {
+        if (isTransientHttpStatus(resp.status)) {
           rateBackoff(source);
           if (attempt < retries) {
-            const wait = RETRY_BASE_MS * Math.pow(2, attempt);
-            console.warn(`Rate limited (429) on attempt ${attempt + 1}, retrying in ${wait}ms...`);
+            const wait = retryDelayMs(resp, attempt);
+            console.warn(`Transient lookup error (${resp.status}) on attempt ${attempt + 1}, retrying in ${wait}ms...`);
             await sleep(wait);
             continue;
           }
+          const kind = resp.status === 429 ? "rate_limited" : "upstream";
+          throw makeLookupError(kind, resp.status, `transient lookup error ${resp.status}`);
         }
         return null;
       } catch (err) {
         rateBackoff(source);
+        if (err?.name === "LookupError") throw err;
         if (attempt < retries) {
           const wait = RETRY_BASE_MS * Math.pow(2, attempt);
           console.warn(`Request failed (${err.message}), retrying in ${wait}ms...`);
@@ -93,30 +169,183 @@
           continue;
         }
         console.warn(`Request failed after ${retries + 1} attempts:`, err.message);
-        return null;
+        throw makeLookupError("network", 0, err.message || "network lookup failed");
       }
     }
     return null;
   }
 
   // ─── API searches ────────────────────────────────────────────────────
+  function metadataCacheKey(source, title) {
+    return `${source}:${B.normalizeTitle(title || "")}`;
+  }
+
   async function searchSSMatch(title) {
-    const data = await fetchJSON(SS_MATCH, { query: title, fields: SS_FIELDS }, { is404Ok: true });
+    const data = await metadataCache.getOrSet(metadataCacheKey("ss-match", title), () =>
+      fetchJSON(SS_MATCH, { query: title, fields: SS_FIELDS }, { is404Ok: true }));
     if (!data?.data?.[0]) return null;
     return B.ssToStandard(data.data[0]);
   }
 
   async function searchSSSearch(title) {
-    const data = await fetchJSON(SS_SEARCH, { query: title, limit: "5", fields: SS_FIELDS });
+    const data = await metadataCache.getOrSet(metadataCacheKey("ss-search", title), () =>
+      fetchJSON(SS_SEARCH, { query: title, limit: "5", fields: SS_FIELDS }));
     return (data?.data || []).map(B.ssToStandard);
   }
 
   async function searchCrossref(title) {
-    const data = await fetchJSON(CROSSREF_API, {
-      "query.title": title, rows: "5",
-      select: "title,author,published-print,published-online,container-title,volume,issue,page,DOI,publisher,URL,type",
-    });
+    const data = await metadataCache.getOrSet(metadataCacheKey("crossref", title), () =>
+      fetchJSON(CROSSREF_API, {
+        "query.title": title, rows: "5",
+        select: "title,author,published-print,published-online,container-title,volume,issue,page,DOI,publisher,URL,type",
+      }));
     return (data?.message?.items || []).map(B.crossrefToStandard);
+  }
+
+  function doiCacheKey(doi) {
+    return String(doi || "").trim().toLowerCase();
+  }
+
+  async function searchCrossrefDoi(doi) {
+    const key = doiCacheKey(doi);
+    if (!key) return null;
+    const encodedDoi = encodeURIComponent(key);
+    const data = await metadataCache.getOrSet(`crossref-doi:${key}`, () =>
+      fetchJSON(`${CROSSREF_API}/${encodedDoi}`, {}, {
+        retries: Math.min(MAX_RETRIES, 2),
+        is404Ok: true,
+      }));
+    return data?.message ? B.crossrefToStandard(data.message) : null;
+  }
+
+  async function enrichCandidateWithDoiMetadata(candidate) {
+    if (!candidate?.doi || /crossref/i.test(String(candidate?._source || ""))) return candidate;
+    try {
+      const crossref = await searchCrossrefDoi(candidate.doi);
+      if (crossref && B.isSamePaper(candidate, crossref))
+        return B.mergeMetadata(candidate, crossref);
+    } catch (err) {
+      console.warn("CrossRef DOI enrichment failed:", err.message);
+    }
+    return candidate;
+  }
+
+  async function enrichCandidatesWithDoiMetadata(candidates) {
+    return Promise.all((candidates || []).map(enrichCandidateWithDoiMetadata));
+  }
+
+  function firstAuthorSearchToken(original) {
+    const first = String(original?.author || "").split(/\s+and\s+/i)[0] || "";
+    const cleaned = B.stripLatex(first).replace(/[{}]/g, " ").replace(/\s+/g, " ").trim();
+    if (!cleaned) return "";
+    if (cleaned.includes(",")) return cleaned.split(",")[0].trim();
+    const parts = cleaned.split(/\s+/).filter(Boolean);
+    return parts[parts.length - 1] || "";
+  }
+
+  function dblpSearchQuery(title, original) {
+    const author = firstAuthorSearchToken(original);
+    return [title, author].filter(Boolean).join(" ");
+  }
+
+  function dblpSearchQueries(title, original) {
+    return Array.from(new Set([
+      dblpSearchQuery(title, original),
+      title,
+    ].map(q => String(q || "").trim()).filter(Boolean)));
+  }
+
+  function fetchDblpJsonp(params) {
+    return new Promise((resolve, reject) => {
+      const callbackName = `__dblpCallback${Date.now()}_${Math.random().toString(36).slice(2)}`;
+      const script = document.createElement("script");
+      const u = new URL(DBLP_API);
+      for (const [key, value] of Object.entries(params)) u.searchParams.set(key, value);
+      u.searchParams.set("format", "jsonp");
+      u.searchParams.set("callback", callbackName);
+      let settled = false;
+      const cleanup = () => {
+        settled = true;
+        delete window[callbackName];
+        script.remove();
+      };
+      const timer = window.setTimeout(() => {
+        if (settled) return;
+        cleanup();
+        reject(makeLookupError("upstream", 0, "DBLP JSONP timed out"));
+      }, 12000);
+      window[callbackName] = (data) => {
+        window.clearTimeout(timer);
+        cleanup();
+        resolve(data);
+      };
+      script.onerror = () => {
+        window.clearTimeout(timer);
+        cleanup();
+        reject(makeLookupError("network", 0, "DBLP JSONP request failed"));
+      };
+      script.src = u.toString();
+      document.head.appendChild(script);
+    });
+  }
+
+  async function fetchDblpData(params) {
+    if (USE_METADATA_PROXY) return fetchJSON(DBLP_API, { ...params, format: "json" });
+    return fetchDblpJsonp(params);
+  }
+
+  async function searchDblp(title, original) {
+    let fallback = [];
+    for (const query of dblpSearchQueries(title, original)) {
+      const data = await metadataCache.getOrSet(metadataCacheKey("dblp", query), () =>
+        fetchDblpData({ q: query, h: "10" }));
+      const hits = data?.result?.hits?.hit || [];
+      const candidates = hits.map(B.dblpToStandard).filter(candidate => candidate.title);
+      if (!fallback.length) fallback = candidates;
+      if (candidates.some(candidate => B.titleSimilarity(title, candidate.title || "") >= B.MIN_TITLE_SIM))
+        return candidates;
+    }
+    return fallback;
+  }
+
+  function openreviewSearchQuery(title, original) {
+    const compactTitle = B.looseTitleText(title)
+      .split(/\s+/)
+      .filter(token => token.length > 2)
+      .slice(0, 8)
+      .join(" ");
+    const author = firstAuthorSearchToken(original);
+    return [compactTitle, author].filter(Boolean).join(" ");
+  }
+
+  function openreviewValue(value) {
+    return value && typeof value === "object" && "value" in value ? value.value : value;
+  }
+
+  function openreviewNoteScore(note, title) {
+    const content = note?.content || {};
+    const noteTitle = String(openreviewValue(content.title) || "");
+    const invitation = String(note?.invitation || "");
+    const venueid = String(openreviewValue(content.venueid) || "");
+    const venue = String(openreviewValue(content.venue) || "");
+    let score = B.titleSimilarity(title, noteTitle);
+    if (/ICLR\.cc\//i.test(`${invitation} ${venueid}`) || /ICLR/i.test(venue)) score += 10;
+    if (/^dblp\.org\//i.test(invitation) || /^dblp\.org\//i.test(venueid)) score -= 15;
+    if (openreviewValue(content._bibtex)) score += 3;
+    return score;
+  }
+
+  async function searchOpenReview(title, original) {
+    if (!OPENREVIEW_API) return [];
+    const query = openreviewSearchQuery(title, original);
+    if (!query.trim()) return [];
+    const data = await metadataCache.getOrSet(metadataCacheKey("openreview", query), () =>
+      fetchJSON(OPENREVIEW_API, { term: query, content: "all", source: "all", limit: "10" }));
+    return (data?.notes || [])
+      .slice()
+      .sort((a, b) => openreviewNoteScore(b, title) - openreviewNoteScore(a, title))
+      .map(B.openreviewToStandard)
+      .filter(candidate => candidate.title);
   }
 
   function bibEntryToArxivCandidate(entry, arxivId) {
@@ -141,20 +370,22 @@
   async function fetchLocalArxivCandidate(arxivId) {
     const id = B.normalizeArxivId(arxivId);
     if (!id) return null;
-    try {
-      const u = new URL(LOCAL_ARXIV_BIBTEX, window.location.origin);
-      u.searchParams.set("id", id);
-      const resp = await fetch(u.toString());
-      if (!resp.ok) return null;
-      const data = await resp.json();
-      if (!data?.bibtex) return null;
-      const entry = B.parseBib(data.bibtex)[0];
-      if (!entry?.title) return null;
-      return bibEntryToArxivCandidate(entry, id);
-    } catch (err) {
-      console.warn("Local arXiv lookup failed:", err instanceof Error ? err.message : err);
-      return null;
-    }
+    return arxivCache.getOrSet(`arxiv:${id}`, async () => {
+      try {
+        const u = new URL(LOCAL_ARXIV_BIBTEX, window.location.origin);
+        u.searchParams.set("id", id);
+        const resp = await fetch(u.toString());
+        if (!resp.ok) return null;
+        const data = await resp.json();
+        if (!data?.bibtex) return null;
+        const entry = B.parseBib(data.bibtex)[0];
+        if (!entry?.title) return null;
+        return bibEntryToArxivCandidate(entry, id);
+      } catch (err) {
+        console.warn("Local arXiv lookup failed:", err instanceof Error ? err.message : err);
+        return null;
+      }
+    });
   }
 
   async function addLocalArxivCandidates(candidates, original) {
@@ -166,41 +397,112 @@
     return B.dedupeCandidates(arxivCandidates.filter(Boolean).concat(candidates));
   }
 
+  function rememberLookupError(errors, err) {
+    if (!err) return;
+    errors.push(err);
+  }
+
+  function throwIfAllLookupsFailed(candidates, errors) {
+    if (!candidates.length && errors.length) throw errors[0];
+  }
+
   async function lookupPaperFast(title, original) {
+    const errors = [];
+    const curatedCandidate = B.curatedCandidateForEntry(original);
+    if (curatedCandidate) return curatedCandidate;
     const arxivCandidate = await fetchLocalArxivCandidate(B.extractArxivId(original));
-    const ssMatch = await searchSSMatch(title);
+    let ssMatch = null;
+    try {
+      ssMatch = await searchSSMatch(title);
+    } catch (err) {
+      rememberLookupError(errors, err);
+    }
+
+    let crCandidates = [];
+    try {
+      crCandidates = await searchCrossref(title);
+    } catch (err) {
+      rememberLookupError(errors, err);
+    }
+
+    let dblpCandidates = [];
+    try {
+      dblpCandidates = await searchDblp(title, original);
+    } catch (err) {
+      rememberLookupError(errors, err);
+    }
+
+    let openReviewCandidates = [];
+    try {
+      openReviewCandidates = await searchOpenReview(title, original);
+    } catch (err) {
+      rememberLookupError(errors, err);
+    }
+    const bibliographicCandidates = crCandidates.concat(dblpCandidates, openReviewCandidates);
+
     if (ssMatch && B.titleSimilarity(title, ssMatch.title || "") >= B.MIN_TITLE_SIM) {
+      ssMatch = await enrichCandidateWithDoiMetadata(ssMatch);
       if (arxivCandidate && B.isSamePaper(arxivCandidate, ssMatch))
-        return arxivCandidate;
-      const crCandidates = await searchCrossref(title);
-      const crMatch = B.bestMatch(crCandidates, title);
-      if (crMatch && B.isSamePaper(ssMatch, crMatch))
-        return B.mergeMetadata(ssMatch, crMatch);
+        return B.mergeMetadata(ssMatch, arxivCandidate);
+      const bibliographicMatch = B.bestMatch(bibliographicCandidates, title);
+      if (bibliographicMatch && B.isSamePaper(ssMatch, bibliographicMatch))
+        return B.mergeMetadata(ssMatch, bibliographicMatch);
       return ssMatch;
     }
 
-    const crCandidates = await searchCrossref(title);
-    const crMatch = B.bestMatch(crCandidates, title);
-    if (crMatch) return crMatch;
+    const bibliographicMatch = B.bestMatch(bibliographicCandidates, title);
+    if (bibliographicMatch) return bibliographicMatch;
     if (arxivCandidate && B.titleSimilarity(title, arxivCandidate.title || "") >= B.MIN_TITLE_SIM)
       return arxivCandidate;
 
-    const ssCandidates = await searchSSSearch(title);
-    return B.bestMatch(ssCandidates, title) || arxivCandidate;
+    let ssCandidates = [];
+    try {
+      ssCandidates = await searchSSSearch(title);
+    } catch (err) {
+      rememberLookupError(errors, err);
+    }
+    ssCandidates = await enrichCandidatesWithDoiMetadata(ssCandidates);
+    const ssFallback = B.bestMatch(ssCandidates, title);
+    if (ssFallback) return ssFallback;
+    if (arxivCandidate) return arxivCandidate;
+    throwIfAllLookupsFailed([], errors);
+    return null;
   }
 
   async function searchCandidatePool(title, original) {
     const candidates = [];
-    const ssMatch = await searchSSMatch(title);
-    if (ssMatch) candidates.push(ssMatch);
-
-    const [crCandidates, ssCandidates] = await Promise.all([
+    const curatedCandidate = B.curatedCandidateForEntry(original);
+    if (curatedCandidate) candidates.push(curatedCandidate);
+    const errors = [];
+    const results = await Promise.allSettled([
+      searchSSMatch(title),
       searchCrossref(title),
       searchSSSearch(title),
+      searchDblp(title, original),
+      searchOpenReview(title, original),
     ]);
-    candidates.push(...crCandidates, ...ssCandidates);
 
-    return addLocalArxivCandidates(B.dedupeCandidates(candidates), original);
+    const [ssMatchResult, crResult, ssSearchResult, dblpResult, openReviewResult] = results;
+    if (ssMatchResult.status === "fulfilled" && ssMatchResult.value)
+      candidates.push(ssMatchResult.value);
+    else if (ssMatchResult.status === "rejected") rememberLookupError(errors, ssMatchResult.reason);
+
+    if (crResult.status === "fulfilled") candidates.push(...crResult.value);
+    else rememberLookupError(errors, crResult.reason);
+
+    if (ssSearchResult.status === "fulfilled") candidates.push(...ssSearchResult.value);
+    else rememberLookupError(errors, ssSearchResult.reason);
+
+    if (dblpResult.status === "fulfilled") candidates.push(...dblpResult.value);
+    else rememberLookupError(errors, dblpResult.reason);
+
+    if (openReviewResult.status === "fulfilled") candidates.push(...openReviewResult.value);
+    else rememberLookupError(errors, openReviewResult.reason);
+
+    const enriched = await enrichCandidatesWithDoiMetadata(B.dedupeCandidates(candidates));
+    const withArxiv = await addLocalArxivCandidates(B.dedupeCandidates(enriched), original);
+    throwIfAllLookupsFailed(withArxiv, errors);
+    return withArxiv;
   }
 
   function mergeSamePaperMetadata(primary, candidates) {
@@ -245,6 +547,19 @@
     };
   }
 
+  function buildRerankedCandidate(original, rankedBest, candidateChoices, aiChoice) {
+    let selected = rankedBest;
+    if (B.shouldUseRerankCandidate(original, rankedBest, aiChoice?.candidate))
+      selected = aiChoice.candidate;
+    const selectedIndex = candidateChoices.indexOf(selected);
+    return attachRerankDecision(
+      B.preservePublishedVenue(original, mergeSamePaperMetadata(selected, candidateChoices)),
+      aiChoice,
+      candidateChoices,
+      selectedIndex >= 0 ? selectedIndex : 0
+    );
+  }
+
   async function lookupPaperWithRerank(title, original) {
     const candidates = await searchCandidatePool(title, original);
     const preferPublished = optPreferPublished?.checked !== false;
@@ -255,35 +570,37 @@
     const ranked = B.rerankCandidates(candidateChoices, original, { preferPublished });
     if (!ranked.best) return null;
 
-    let selected = ranked.best;
-    let aiChoice = null;
+    const heuristic = buildRerankedCandidate(original, ranked.best, candidateChoices, null);
     const provider = getRerankProvider();
-    if (candidateChoices.length > 1 && provider !== "off") {
-      try {
-        const reranker = provider === "vllm" ? window.BibVllmReranker : window.BibGemmaReranker;
-        if (!reranker) throw new Error(`${provider} reranker is unavailable.`);
-        aiChoice = await reranker.rerank({
-          original,
-          candidates: candidateChoices,
-          parseChoice: B.parseRerankChoice,
-          preferPublished,
-          onStatus: setGemmaRerankStatus,
-        });
-        if (aiChoice?.candidate)
-          selected = aiChoice.candidate;
-      } catch (err) {
-        console.warn(`${provider} rerank failed; using heuristic candidate:`, err.message);
-        setGemmaRerankStatus(`${provider === "vllm" ? "vLLM" : "Gemma"} unavailable · using heuristic rerank`);
-      }
+    const shouldUseLlm = B.shouldCallLlmRerank(ranked, candidateChoices, original, {
+      preferPublished,
+      speedMode: getSpeedMode(),
+    });
+
+    if (candidateChoices.length > 1 && provider !== "off" && shouldUseLlm) {
+      heuristic._rerankPending = true;
+      heuristic._pendingRerank = (async () => {
+        try {
+          const reranker = provider === "vllm" ? window.BibVllmReranker : window.BibGemmaReranker;
+          if (!reranker) throw new Error(provider + " reranker is unavailable.");
+          const aiChoice = await reranker.rerank({
+            original,
+            candidates: candidateChoices,
+            parseChoice: B.parseRerankChoice,
+            preferPublished,
+            language: getEvidenceLanguage(),
+            onStatus: setGemmaRerankStatus,
+          });
+          return buildRerankedCandidate(original, ranked.best, candidateChoices, aiChoice);
+        } catch (err) {
+          console.warn(provider + " rerank failed; using heuristic candidate:", err.message);
+          setGemmaRerankStatus((provider === "vllm" ? "vLLM" : "Gemma") + " unavailable · using heuristic rerank");
+          return null;
+        }
+      })();
     }
 
-    const selectedIndex = candidateChoices.indexOf(selected);
-    return attachRerankDecision(
-      mergeSamePaperMetadata(selected, candidateChoices),
-      aiChoice,
-      candidateChoices,
-      selectedIndex >= 0 ? selectedIndex : ranked.bestIndex
-    );
+    return heuristic;
   }
 
   async function lookupPaper(title, original) {
@@ -492,68 +809,110 @@
     runVerification();
   }
 
+  async function verifyEntryAt(index) {
+    const entry = parsedEntries[index];
+    const title = entry.title || "";
+    const cleanTitle = B.stripLatex(title);
+    const lookupEntry = B.normalizeEntryForLookup(entry);
+    let found = null;
+    let lookupError = null;
+    const isTourFakeEntry = /QZX999/i.test(cleanTitle);
+    if (isTourFakeEntry) {
+      await sleep(500);
+    } else {
+      try { found = await lookupPaper(cleanTitle, lookupEntry); }
+      catch (err) {
+        lookupError = err;
+        console.warn("Lookup failed:", err);
+      }
+    }
+
+    if (lookupError) {
+      const r = buildResult(entry, index, "needs_review", 0, [], {}, null);
+      r.lookup_error = lookupError.message || String(lookupError);
+      return r;
+    }
+    if (!found) return buildResult(entry, index, "not_found", 0, [], {}, null);
+
+    const cmp = B.compareEntry(entry, found);
+    let finalStatus = B.shouldKeepDeterministicStatus(entry, found, cmp)
+      ? cmp.status
+      : B.resolveRerankStatus(cmp.status, found._rerankStatus);
+    if (finalStatus !== "not_found" && B.hasCriticalMetadataConflict(entry, found))
+      finalStatus = "needs_review";
+    let fieldDiffs = cmp.field_diffs;
+    if (finalStatus === "needs_review" && found && !fieldDiffs.length)
+      fieldDiffs = B.fieldDiffsForNeedsReview(entry, found);
+    if (finalStatus === "needs_review" && B.fieldDiffsAreEquivalent(fieldDiffs)) {
+      finalStatus = "verified";
+      fieldDiffs = [];
+    }
+    return buildResult(entry, index, finalStatus, cmp.title_score, fieldDiffs, cmp.suggested, found);
+  }
+
   async function runVerification() {
     const total = parsedEntries.length;
-    const seenTitles = new Map();
+    const seenDuplicateKeys = new Map();
+    let completed = 0;
+    results = new Array(total);
 
-    for (let i = 0; i < total; i++) {
-      const entry = parsedEntries[i];
-      const title = entry.title || "";
+    parsedEntries.forEach((entry, i) => {
       const entryId = entry.ID || `entry_${i}`;
+      const duplicateOf = B.findDuplicateEntryId(entry, seenDuplicateKeys);
+      if (duplicateOf) entry._duplicateOf = duplicateOf;
+      B.registerDuplicateKeys(entryId, entry, seenDuplicateKeys);
+    });
 
-      const normKey = B.normalizeTitle(title);
-      if (normKey && seenTitles.has(normKey)) {
-        entry._duplicateOf = seenTitles.get(normKey);
-      } else if (normKey) {
-        seenTitles.set(normKey, entryId);
-      }
-
-      const pct = Math.round(((i + 1) / total) * 100);
-      barProgressFill.style.width = pct + "%";
-      barProgressText.textContent = `Verifying ${i + 1} / ${total}: ${title.slice(0, 50)}…`;
-
-      if (!title.trim()) {
-        const r = buildResult(entry, i, "not_found", 0, [], {}, null);
-        results.push(r);
+    await B.runBoundedQueue(parsedEntries, async (entry, i) => {
+      const title = entry.title || "";
+      if (!title.trim()) return buildResult(entry, i, "not_found", 0, [], {}, null);
+      return verifyEntryAt(i);
+    }, {
+      concurrency: verificationConcurrency(),
+      onResult: (r, i) => {
+        completed++;
+        results[i] = r;
+        const pct = Math.round((completed / total) * 100);
+        barProgressFill.style.width = pct + "%";
+        barProgressText.textContent = `Verified ${completed} / ${total}: ${(r.title || "").slice(0, 50)}…`;
         renderEntryCard(r);
         updateSummary();
+        updateAuthorPills();
         updatePreview();
-        continue;
-      }
+        if (r.pending_rerank) {
+          const pending = r.pending_rerank;
+          pending.then(patchedFound => {
+            if (!patchedFound || results[i]?.pending_rerank !== pending) return;
+            const currentDecision = decisions[i];
+            const stillDefaultCandidate = !currentDecision ||
+              (currentDecision.action === "candidate" && currentDecision.candidateIndex === r.selected_candidate_index);
+            if (!stillDefaultCandidate) return;
 
-      const cleanTitle = B.stripLatex(title);
-      let found = null;
-      // Tour shortcut: the fabricated sample entry has a unique marker. Skip the
-      // real network lookup so the onboarding flow doesn't stall on a guaranteed
-      // miss; pause briefly so the "not found" status still feels deliberate.
-      const isTourFakeEntry = /QZX999/i.test(cleanTitle);
-      if (isTourFakeEntry) {
-        await sleep(500);
-      } else {
-        try { found = await lookupPaper(cleanTitle, entry); } catch (err) { console.warn("Lookup failed:", err); }
-      }
-
-      if (!found) {
-        const r = buildResult(entry, i, "not_found", 0, [], {}, null);
-        results.push(r);
-        renderEntryCard(r);
-      } else {
-        const cmp = B.compareEntry(entry, found);
-        let finalStatus = B.resolveRerankStatus(cmp.status, found._rerankStatus);
-        if (finalStatus !== "not_found" && B.hasCriticalMetadataConflict(entry, found))
-          finalStatus = "needs_review";
-        let fieldDiffs = cmp.field_diffs;
-        if (finalStatus === "needs_review" && found && !fieldDiffs.length)
-          fieldDiffs = B.fieldDiffsForNeedsReview(entry, found);
-        const r = buildResult(entry, i, finalStatus, cmp.title_score, fieldDiffs, cmp.suggested, found);
-        results.push(r);
-        renderEntryCard(r);
-      }
-
-      updateSummary();
-      updateAuthorPills();
-      updatePreview();
-    }
+            const entry = parsedEntries[i];
+            const cmp = B.compareEntry(entry, patchedFound);
+            let finalStatus = B.shouldKeepDeterministicStatus(entry, patchedFound, cmp)
+              ? cmp.status
+              : B.resolveRerankStatus(cmp.status, patchedFound._rerankStatus);
+            if (finalStatus !== "not_found" && B.hasCriticalMetadataConflict(entry, patchedFound))
+              finalStatus = "needs_review";
+            let fieldDiffs = cmp.field_diffs;
+            if (finalStatus === "needs_review" && !fieldDiffs.length)
+              fieldDiffs = B.fieldDiffsForNeedsReview(entry, patchedFound);
+            if (finalStatus === "needs_review" && B.fieldDiffsAreEquivalent(fieldDiffs)) {
+              finalStatus = "verified";
+              fieldDiffs = [];
+            }
+            const patched = buildResult(entry, i, finalStatus, cmp.title_score, fieldDiffs, cmp.suggested, patchedFound);
+            patched.pending_rerank = null;
+            results[i] = patched;
+            renderEntryCard(patched);
+            updateSummary();
+            updateAuthorPills();
+            updatePreview();
+          });
+        }
+      },
+    });
 
     barProgressFill.classList.add("done");
     barProgressText.textContent = `Done — ${total} entries verified`;
@@ -597,7 +956,9 @@
       selected_candidate_index: defaultCandidateIndex,
       selected_choice: defaultCandidateIndex >= 0 ? "candidate" : "auto",
       paper_url: found ? B.paperUrlForEntry(found) : B.paperUrlForEntry(entry),
+      pending_rerank: found ? (found._pendingRerank || null) : null,
       duplicate_of: entry._duplicateOf || null,
+      lookup_error: null,
     };
   }
 
@@ -632,6 +993,24 @@
     return candidate.journal || candidate.booktitle || "";
   }
 
+  function provenanceHTML(entry, candidate) {
+    const provenance = B.candidateProvenance(entry || {}, candidate || {});
+    const badges = provenance.badges.map(badge =>
+      `<span class="provenance-badge provenance-${esc(badge.tone || "source")}">${esc(badge.label)}</span>`
+    ).join("");
+    const diagnostics = provenance.warnings.length
+      ? provenance.warnings
+      : provenance.diagnostics;
+    const diagnosticHTML = diagnostics.length
+      ? `<div class="candidate-provenance-notes">${diagnostics.map(note => `<span>${esc(note)}</span>`).join("")}</div>`
+      : "";
+    return `<div class="candidate-provenance">
+      <span class="provenance-confidence provenance-${esc(provenance.confidence.toLowerCase())}">${esc(provenance.confidence)}</span>
+      ${badges}
+      ${diagnosticHTML}
+    </div>`;
+  }
+
   function candidateChoiceHTML(r) {
     const choices = r.candidate_choices || [];
     if (choices.length < 1) return "";
@@ -647,13 +1026,15 @@
       const openLink = openUrl
         ? `<a class="candidate-open-link" href="${esc(openUrl)}" target="_blank" rel="noopener" title="Open paper page">Open paper</a>`
         : "";
-      const score = Math.round(B.candidateScore(candidate, parsedEntries[r.index] || {}, { preferPublished: true }));
+      const score = Math.round(B.candidateScore(candidate, parsedEntries[r.index] || {}, { preferPublished: getSettings().preferPublished }));
+      const provenance = provenanceHTML(parsedEntries[r.index] || {}, candidate);
       return `<div class="candidate-option ${selected === key ? "active" : ""}">
         <button class="candidate-option-btn" type="button" data-entry="${r.index}" data-choice-action="candidate" data-candidate-index="${index}">
           <span class="candidate-rank">${index + 1}</span>
           <span class="candidate-main">
             <span class="candidate-title">${esc(title)}</span>
             <span class="candidate-meta">${esc(meta)}${doi}</span>
+            ${provenance}
           </span>
           <span class="candidate-score">${Number.isFinite(score) ? esc(String(score)) : ""}</span>
         </button>
@@ -821,7 +1202,7 @@
       const extraRows = extraFields.map(f => {
         const val = entry[f] || "";
         const candidateVal = selectedCandidate?.[f] || "";
-        const useCandidateValue = r.selected_choice === "candidate" && !!candidateVal.trim();
+        const useCandidateValue = r.selected_choice === "candidate" && !val.trim() && !!candidateVal.trim();
         if (!fieldEdits[idx][f]) {
           fieldEdits[idx][f] = {
             action: useCandidateValue ? "found" : "original",
@@ -866,22 +1247,24 @@
       duplicateHTML = `<div class="duplicate-row">Duplicate of <strong>${esc(r.duplicate_of)}</strong></div>`;
 
     let reviewHintHTML = "";
-    if (r.status === "needs_review" && r.found_title) {
+    if (r.status === "needs_review" && r.lookup_error) {
+      reviewHintHTML = `<div class="review-hint">${esc(tEvidence("lookupFailed"))}</div>`;
+    } else if (r.status === "needs_review" && r.found_title) {
       const aiReason = r.ai_reason
-        ? ` Local LLM reason: ${esc(r.ai_reason)}`
+        ? `${esc(tEvidence("localLlmReason"))}${esc(r.ai_reason)}`
         : "";
-      reviewHintHTML = `<div class="review-hint">The closest database record may not be the paper you meant
-        (<strong>${esc(String(r.title_score))}%</strong> title similarity to
+      reviewHintHTML = `<div class="review-hint">${esc(tEvidence("reviewPrefix"))}
+        (<strong>${esc(String(r.title_score))}%</strong> ${esc(tEvidence("reviewMiddle"))}
         <strong class="review-hint-match">${esc(r.found_title)}</strong>).
-        Review the suggestions below and use the checkmark on each row to adopt a value, or keep your original text.${aiReason}</div>`;
+        ${esc(tEvidence("reviewAction"))}${aiReason}</div>`;
     }
 
     let notFoundHintHTML = "";
     if (r.status === "not_found") {
       const hasTitle = (r.title || "").trim();
       notFoundHintHTML = `<div class="not-found-hint">${hasTitle
-        ? "No matching publication was found in CrossRef or Semantic Scholar for this title. Try fixing typos or adding missing words, then re-run verification, or check the reference manually."
-        : "This entry has no title, so it cannot be looked up automatically. Add a title in your .bib file or verify the entry by hand."}</div>`;
+        ? esc(tEvidence("notFoundWithTitle"))
+        : esc(tEvidence("notFoundNoTitle"))}</div>`;
     }
 
     const candidateHTML = candidateChoiceHTML(r);
@@ -960,12 +1343,18 @@
 
   function statusForCandidate(entry, candidate) {
     const cmp = B.compareEntry(entry, candidate);
-    let status = B.resolveRerankStatus(cmp.status, candidate._rerankStatus);
+    let status = B.shouldKeepDeterministicStatus(entry, candidate, cmp)
+      ? cmp.status
+      : B.resolveRerankStatus(cmp.status, candidate._rerankStatus);
     if (status !== "not_found" && B.hasCriticalMetadataConflict(entry, candidate))
       status = "needs_review";
-    const fieldDiffs = status === "needs_review" && !cmp.field_diffs.length
+    let fieldDiffs = status === "needs_review" && !cmp.field_diffs.length
       ? B.fieldDiffsForNeedsReview(entry, candidate)
       : cmp.field_diffs;
+    if (status === "needs_review" && B.fieldDiffsAreEquivalent(fieldDiffs)) {
+      status = "verified";
+      fieldDiffs = [];
+    }
     return { cmp, fieldDiffs, status };
   }
 
@@ -1580,16 +1969,7 @@
       const hasVisibleDiffs = diffRows.length > 0 && ![...diffRows].every(row => row.classList.contains("author-match-hidden"));
       const hasInjectedRows = card.querySelector('.diff-row[data-injected]') !== null;
 
-      let effectiveStatus;
-      if (hasInjectedRows && hasVisibleDiffs && savedStatus === "verified") {
-        // Was verified but now has injected author truncation suggestion
-        effectiveStatus = "updated";
-      } else if (!hasVisibleDiffs && (savedStatus === "updated" || savedStatus === "needs_review")) {
-        // All diffs hidden — promote to verified
-        effectiveStatus = "verified";
-      } else {
-        effectiveStatus = savedStatus;
-      }
+      const effectiveStatus = B.displayStatusForCard(savedStatus, { hasVisibleDiffs, hasInjectedRows });
 
       // Update card visuals
       card.dataset.status = effectiveStatus;
@@ -1632,10 +2012,10 @@
     const count = results.length;
     let final = parsedEntries.slice(0, count).map((entry, i) => {
       const r = results[i];
-      if (!r) return { ...entry };
+      if (!r) return B.cleanBibliographyEntry ? B.cleanBibliographyEntry({ ...entry }) : { ...entry };
       const decision = decisions[i] || {};
       if (decision.action === "exclude") return null;
-      if (decision.action === "original") return { ...entry };
+      if (decision.action === "original") return B.cleanBibliographyEntry ? B.cleanBibliographyEntry({ ...entry }) : { ...entry };
       if (s.removeNotFound && r.status === "not_found") return null;
 
       const selectedCandidate = decision.action === "candidate"
@@ -1657,6 +2037,7 @@
         }
       }
 
+
       if (s.maxAuthors > 0 && out.author && r.status !== "not_found") {
         out.author = truncateAuthors(out.author, s.maxAuthors);
       }
@@ -1664,20 +2045,16 @@
       if (s.preferPublished) {
         const venue = (out.journal || out.booktitle || "").toLowerCase();
         if (venue.includes("arxiv") || venue.includes("preprint") || venue.includes("corr")) {
-          const res = results[i];
-          if (res && res.suggested) {
-            const foundVenue = res.suggested.journal || res.suggested.booktitle || "";
-            const fvLower = foundVenue.toLowerCase();
-            if (foundVenue && !fvLower.includes("arxiv") && !fvLower.includes("preprint") && !fvLower.includes("corr")) {
-              if (out.journal) out.journal = foundVenue;
-              else if (out.booktitle) out.booktitle = foundVenue;
-            }
+          const publishedVenue = B.preferPublishedVenueUpgrade(selectedCandidate, r.suggested);
+          if (publishedVenue) {
+            if (out.journal) out.journal = publishedVenue;
+            else if (out.booktitle) out.booktitle = publishedVenue;
           }
         }
       }
       if ((out.ENTRYTYPE || "").toLowerCase() === "inproceedings" && out.booktitle)
         delete out.journal;
-      return out;
+      return B.cleanBibliographyEntry ? B.cleanBibliographyEntry(out) : out;
     }).filter(Boolean);
 
     if (s.removeDuplicates) {
@@ -1693,7 +2070,7 @@
         return true;
       });
     }
-    return B.entriesToBib(final);
+    return B.entriesToBib(final, { latexEscape: s.latexEscape });
   }
 
   let currentPreviewBib = "";
@@ -1829,15 +2206,49 @@
   const optRemoveNotFound = $("#opt-remove-notfound");
   const optMaxAuthors = $("#opt-max-authors");
   const optPreferPublished = $("#opt-prefer-published");
+  const optLatexEscape = $("#opt-latex-escape");
   const optLocalGpuRerank = $("#opt-local-gpu-rerank");
   const optRerankProvider = $("#opt-rerank-provider");
+  const optEvidenceLanguage = $("#opt-evidence-language");
+  const optSpeedMode = $("#opt-speed-mode");
   const gpuRerankStatus = $("#gpu-rerank-status");
   const dedupCriteriaWrap = $("#dedup-criteria-wrap");
+
+  if (optEvidenceLanguage) {
+    optEvidenceLanguage.value = normalizeEvidenceLanguage(
+      localStorage.getItem(EVIDENCE_LANGUAGE_STORAGE) || optEvidenceLanguage.value
+    );
+  }
+  if (optSpeedMode) {
+    optSpeedMode.value = normalizeSpeedMode(localStorage.getItem(SPEED_MODE_STORAGE) || optSpeedMode.value);
+  }
+
+  function normalizeSpeedMode(value) {
+    const mode = String(value || "").toLowerCase();
+    return ["fast", "balanced", "thorough"].includes(mode) ? mode : "balanced";
+  }
+
+  function getSpeedMode() {
+    return normalizeSpeedMode(optSpeedMode?.value || localStorage.getItem(SPEED_MODE_STORAGE));
+  }
+
+  function verificationConcurrency() {
+    const mode = getSpeedMode();
+    if (mode === "fast") return 4;
+    if (mode === "thorough") return 2;
+    return 3;
+  }
 
   function getRerankProvider() {
     if (!optLocalGpuRerank?.checked) return "off";
     return optRerankProvider?.value || "webgpu";
   }
+
+  function getEvidenceLanguage() {
+    return normalizeEvidenceLanguage(optEvidenceLanguage?.value || localStorage.getItem(EVIDENCE_LANGUAGE_STORAGE));
+  }
+
+  window.BibEvidenceLanguage = getEvidenceLanguage;
 
   function describeRerankProvider() {
     const provider = getRerankProvider();
@@ -1878,14 +2289,20 @@
     updatePreview();
   });
 
-  [optRemoveNotFound, optPreferPublished].forEach(el =>
-    el.addEventListener("change", updatePreview));
+  [optRemoveNotFound, optPreferPublished, optLatexEscape].forEach(el =>
+    el?.addEventListener("change", updatePreview));
   optLocalGpuRerank?.addEventListener("change", () => {
     setGemmaRerankStatus(describeRerankProvider());
   });
   optRerankProvider?.addEventListener("change", () => {
     if (optLocalGpuRerank) optLocalGpuRerank.checked = true;
     setGemmaRerankStatus(describeRerankProvider());
+  });
+  optEvidenceLanguage?.addEventListener("change", () => {
+    localStorage.setItem(EVIDENCE_LANGUAGE_STORAGE, getEvidenceLanguage());
+  });
+  optSpeedMode?.addEventListener("change", () => {
+    localStorage.setItem(SPEED_MODE_STORAGE, getSpeedMode());
   });
   detectVllmServer();
   optMaxAuthors.addEventListener("change", () => {
@@ -1902,6 +2319,7 @@
       removeNotFound: optRemoveNotFound.checked,
       maxAuthors: parseInt(optMaxAuthors.value) || 0,
       preferPublished: optPreferPublished.checked,
+      latexEscape: optLatexEscape?.checked || false,
     };
   }
 
@@ -1955,7 +2373,7 @@
   const introOnboardingSteps = [
     {
       title: "Welcome",
-      body: "Local Citation Verifier checks each entry against CrossRef and Semantic Scholar — wrong metadata, missing DOIs, duplicates, and citations that don’t exist online (including AI hallucinations). Your file stays in the browser.",
+      body: "Local Citation Verifier checks each entry against CrossRef, Semantic Scholar, DBLP, and OpenReview — wrong metadata, missing DOIs, duplicates, and citations that don’t exist online (including AI hallucinations). Your file stays in the browser.",
       target: null,
     },
     {
@@ -1975,7 +2393,7 @@
     },
     {
       title: "Run verification",
-      body: "Click <strong>Verify pasted BibTeX</strong> when you’re ready. The app queries CrossRef and Semantic Scholar (a short wait per entry). <strong>When it finishes, the tour continues</strong> and walks through both sample results — updated vs not found — plus settings.",
+      body: "Click <strong>Verify pasted BibTeX</strong> when you’re ready. The app queries CrossRef, Semantic Scholar, DBLP, and OpenReview (a short wait per entry). <strong>When it finishes, the tour continues</strong> and walks through both sample results — updated vs not found — plus settings.",
       target: "#btn-verify-paste",
     },
     {
@@ -2151,7 +2569,7 @@
       },
       {
         title: "First entry — metadata updated",
-        body: "This row matched a real paper. The sample used a <strong>wrong journal</strong> on purpose — suggested venue, DOI, and other fields come from CrossRef / Semantic Scholar. Each line compares your text to the suggestion; accept or revert per field.",
+        body: "This row matched a real paper. The sample used a <strong>wrong journal</strong> on purpose — suggested venue, DOI, and other fields come from CrossRef / Semantic Scholar / DBLP / OpenReview. Each line compares your text to the suggestion; accept or revert per field.",
         target: ".entry-list .entry-card:nth-child(1)",
         panelTop: true,
       },
@@ -2196,8 +2614,30 @@
   }
 
   function esc(str) {
-    const d = document.createElement("div");
-    d.textContent = str;
-    return d.innerHTML;
+    return String(str || "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
   }
+
+  async function loadFixtureFromQuery() {
+    const params = new URLSearchParams(window.location.search);
+    const fixture = params.get("fixture");
+    if (!fixture) return;
+    const autoVerify = params.get("autoverify") === "1";
+    try {
+      const resp = await fetch(`fixtures/${encodeURIComponent(fixture)}.bib`);
+      if (!resp.ok) throw new Error(`fixture not found (${resp.status})`);
+      const content = await resp.text();
+      switchToPasteTab();
+      bibPaste.value = content;
+      if (autoVerify) startVerificationFromContent(content, "Loading fixture...");
+    } catch (err) {
+      console.warn("Fixture load failed:", err);
+    }
+  }
+
+  loadFixtureFromQuery();
 })();

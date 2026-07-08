@@ -34,6 +34,17 @@
     ].join(" ");
   }
 
+  function normalizeEvidenceLanguage(value) {
+    const lang = String(value || "").toLowerCase();
+    return lang === "ko" || lang === "kor" || lang === "korean" ? "ko" : "en";
+  }
+
+  function reasonLanguageInstruction(language) {
+    return normalizeEvidenceLanguage(language) === "ko"
+      ? "Write the reason in Korean."
+      : "Write the reason in English.";
+  }
+
   function buildPrompt(original, candidates, options = {}) {
     const versionRule = options.preferPublished
       ? "If a preprint and a published journal/conference version are the same paper, prefer the published version."
@@ -45,6 +56,8 @@
       `The best must be an integer from 1 to ${candidateCount}; do not return 0, null, or a candidate title.`,
       "Allowed status values: verified, updated, needs_review, not_found.",
       `Allowed risk_flags: ${ALLOWED_RISK_FLAGS.join(", ")}. Use only these exact snake_case strings.`,
+      "JSON keys, status values, and risk_flags must remain in English even when the reason uses another language.",
+      reasonLanguageInstruction(options.language),
       "Use verified only when the BibTeX entry already matches the selected record and no material change is needed.",
       "Use updated only when the selected record is clearly the same paper and changes are safe enrichments, venue normalizations, DOI additions, or same-paper preprint to published-version upgrades.",
       "Use needs_review when the title is generic or ambiguous, the first author differs, the year differs by more than one, the venue changes to an unrelated journal/conference, or volume/pages contradict.",
@@ -139,12 +152,12 @@
     return modelPromise;
   }
 
-  async function rerank({ original, candidates, parseChoice, preferPublished, onStatus }) {
+  async function rerank({ original, candidates, parseChoice, preferPublished, language, onStatus }) {
     if (!candidates || candidates.length < 2) return null;
     onStatus?.("Loading Gemma WebGPU reranker...");
     const model = await loadModel(onStatus);
     onStatus?.("Reranking candidates on local GPU...");
-    const prompt = buildPrompt(original, candidates, { preferPublished });
+    const prompt = buildPrompt(original, candidates, { preferPublished, language });
     const output = await model.complete([{ role: "user", content: prompt }], { maxNewTokens: 160 });
     const decision = parseDecision(output, candidates.length, parseChoice);
     if (!decision) return null;

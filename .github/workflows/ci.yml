@@ -20,10 +20,27 @@ jobs:
         with:
           node-version: ${{ matrix.node-version }}
 
+      - name: Install dependencies
+        run: npm ci
+
       - name: Syntax check
         run: |
           node -c docs/lib.js
           node -c docs/app.js
+          node -c docs/gemma-reranker.js
+          node -c docs/vllm-reranker.js
+          node -c docs/citation-audit.js
 
-      - name: Run tests
-        run: node tests/test_lib.js
+      - name: Run JavaScript tests
+        run: |
+          node tests/test_lib.js
+          node tests/test_speed_primitives.js
+          node tests/test_vllm_reranker.js
+          node tests/test_citation_audit.js
+          node tests/test_fixture_harness.js
+          node tests/test_fixture_snapshot.js
+
+      - name: Run Python proxy tests
+        run: |
+          python3 -m py_compile server/vllm_proxy_server.py
+          python3 tests/test_vllm_proxy.py

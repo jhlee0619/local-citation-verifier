@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'none'; object-src 'none'; form-action 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://unpkg.com https://huggingface.co https://dblp.org https://openreview.net; connect-src 'self' https://api.crossref.org https://api.semanticscholar.org https://dblp.org https://api.openreview.net https://openreview.net https://export.arxiv.org https://arxiv.org https://huggingface.co https://*.huggingface.co https://*.hf.co https://cas-bridge.xethub.hf.co https://cas-server.xethub.hf.co https://transfer.xethub.hf.co; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; worker-src 'self' blob:; font-src 'self' data:" />
   <title>Local Citation Verifier — Local bibliography and citation support QA</title>
   <meta name="description" content="A browser-based citation quality desk for checking BibTeX metadata and judging whether cited manuscript sentences are supported by their referenced papers." />
   <meta name="keywords" content="BibTeX, bibliography checker, verify references, hallucinated citations, LaTeX, CrossRef, Semantic Scholar, DOI, citation checker, academic references, .bib file, Overleaf, BibLaTeX, reference manager, paper verification" />
@@ -37,7 +38,7 @@
   }
   </script>
 
-  <link rel="stylesheet" href="style.css?v=20260621-unified-tools" />
+  <link rel="stylesheet" href="style.css?v=20260622-provenance-badges" />
 </head>
 <body>
   <div class="page-wrap">
@@ -289,6 +290,13 @@
             </label>
           </div>
           <div class="settings-row">
+            <svg class="setting-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 7 4 4 20 4 20 7"/><line x1="9" y1="20" x2="15" y2="20"/><line x1="12" y1="4" x2="12" y2="20"/></svg>
+            <label class="option-toggle">
+              <input type="checkbox" id="opt-latex-escape" />
+              <span>Escape non-ASCII (pdfLaTeX/BibTeX)</span>
+            </label>
+          </div>
+          <div class="settings-row">
             <svg class="setting-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4"/><path d="M12 18v4"/><path d="M4.93 4.93l2.83 2.83"/><path d="M16.24 16.24l2.83 2.83"/><path d="M2 12h4"/><path d="M18 12h4"/><path d="M4.93 19.07l2.83-2.83"/><path d="M16.24 7.76l2.83-2.83"/><circle cx="12" cy="12" r="3"/></svg>
             <label class="option-toggle">
               <input type="checkbox" id="opt-local-gpu-rerank" checked />
@@ -300,6 +308,21 @@
             <select id="opt-rerank-provider" class="option-select">
               <option value="webgpu" selected>WebGPU Gemma</option>
               <option value="vllm">vLLM server</option>
+            </select>
+          </div>
+          <div class="sub-option visible evidence-language-wrap">
+            <span class="sub-label">evidence:</span>
+            <select id="opt-evidence-language" class="option-select">
+              <option value="en" selected>English</option>
+              <option value="ko">한국어</option>
+            </select>
+          </div>
+          <div class="sub-option visible speed-mode-wrap">
+            <span class="sub-label">speed:</span>
+            <select id="opt-speed-mode" class="option-select">
+              <option value="fast">Fast</option>
+              <option value="balanced" selected>Balanced</option>
+              <option value="thorough">Thorough</option>
             </select>
           </div>
           <div class="sub-option visible gpu-rerank-note" id="gpu-rerank-status">On · WebGPU Gemma by default</div>
@@ -318,10 +341,10 @@
   </div>
 
   <script src="https://unpkg.com/fuzzball@2.2.3/dist/fuzzball.umd.min.js"></script>
-  <script src="lib.js?v=20260622-candidate-field-sync"></script>
-  <script src="gemma-reranker.js?v=20260621-prompt-guardrails"></script>
-  <script src="vllm-reranker.js?v=20260621-prompt-guardrails"></script>
-  <script src="citation-audit.js?v=20260621-hide-empty-output"></script>
-  <script src="app.js?v=20260622-candidate-field-sync"></script>
+  <script src="lib.js?v=20260626-doi-year-merge"></script>
+  <script src="gemma-reranker.js?v=20260622-evidence-language"></script>
+  <script src="vllm-reranker.js?v=20260622-evidence-language"></script>
+  <script src="citation-audit.js?v=20260622-xss-hardening"></script>
+  <script src="app.js?v=20260626-doi-year-merge"></script>
 </body>
 </html>

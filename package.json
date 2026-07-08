@@ -1,0 +1,8 @@
+{
+  "name": "local-citation-verifier",
+  "private": true,
+  "type": "commonjs",
+  "devDependencies": {
+    "fuzzball": "^2.2.3"
+  }
+}

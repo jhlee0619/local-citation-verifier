@@ -1,0 +1,76 @@
+[
+  {
+    "id": "lewis2020retrieval",
+    "expectedStatus": "needs_review",
+    "expectedReason": "year_conflict",
+    "found": {
+      "title": "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks",
+      "author": "Lewis, Patrick and Perez, Ethan and Piktus, Aleksandara and Petroni, F. and Karpukhin, Vladimir and Goyal, Naman and Küttler, Heinrich and Lewis, Mike and Yih, Wen-tau and Rocktäschel, Tim and Riedel, Sebastian and Kiela, Douwe",
+      "year": "2022",
+      "journal": "Neural Information Processing Systems",
+      "volume": "33",
+      "pages": "9459--9474",
+      "eprint": "2005.11401",
+      "archiveprefix": "arXiv",
+      "_source": "semantic_scholar",
+      "_arxivId": "2005.11401"
+    }
+  },
+  {
+    "id": "ma2024learningmodalityknowledgealignment",
+    "expectedStatus": "needs_review",
+    "expectedReason": "title_below_threshold",
+    "found": {
+      "title": "Learning Modality Knowledge Alignment for Medical Image Segmentation",
+      "author": "Ma, Wenxuan and Li, Shuang and Cai, Lincan and Kang, Jingxuan",
+      "year": "2024",
+      "journal": "International Conference on Machine Learning",
+      "doi": "10.48550/arXiv.2406.18864",
+      "_source": "semantic_scholar"
+    }
+  },
+  {
+    "id": "he2022masked",
+    "expectedStatus": "updated",
+    "expectedReason": "published_cvpr_candidate",
+    "found": {
+      "title": "Masked Autoencoders Are Scalable Vision Learners",
+      "author": "He, Kaiming and Chen, Xinlei and Xie, Saining and Li, Yanghao and Dollár, Piotr and Girshick, Ross B.",
+      "year": "2022",
+      "journal": "Computer Vision and Pattern Recognition",
+      "booktitle": "Computer Vision and Pattern Recognition",
+      "pages": "16000--16009",
+      "doi": "10.1109/CVPR52688.2022.01553",
+      "_source": "semantic_scholar"
+    }
+  },
+  {
+    "id": "singhal2023towards",
+    "expectedStatus": "needs_review",
+    "expectedReason": "year_conflict",
+    "found": {
+      "title": "Towards expert-level medical question answering with large language models",
+      "author": "Singhal, Karan and Tu, Tao and Gottweis, Juraj and Sayres, Rory and Wulczyn, Ellery and Hou, Le and Clark, Kevin and Pfohl, Stephen and Cole-Lewis, Heather and Neal, Darlene",
+      "year": "2021",
+      "journal": "Nature Medicine",
+      "doi": "10.1038/s41586-023-06291-2",
+      "_source": "semantic_scholar"
+    }
+  },
+  {
+    "id": "san2018imaging",
+    "expectedStatus": "needs_review",
+    "expectedReason": "author_conflict",
+    "found": {
+      "title": "Imaging features and safety and efficacy of endovascular stroke treatment: a meta-analysis of individual patient-level data",
+      "author": "Unrelated, Alice and Mismatch, Bob",
+      "year": "2018",
+      "journal": "The Lancet Neurology",
+      "volume": "17",
+      "number": "10",
+      "pages": "895--904",
+      "doi": "10.1016/S1474-4422(18)30242-4",
+      "_source": "semantic_scholar"
+    }
+  }
+]

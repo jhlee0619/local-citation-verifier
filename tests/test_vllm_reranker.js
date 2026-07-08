@@ -62,6 +62,32 @@ async function testFallsBackToBestOnlyRerankJson() {
   }
 }
 
+async function testCachesIdenticalRerankRequests() {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls++;
+    return { ok: true, json: async () => ({ output: '{"best": 1}' }) };
+  };
+  try {
+    const request = {
+      original: { title: "Paper" },
+      candidates: [{ title: "A" }, { title: "B" }],
+      parseChoice: lib.parseRerankChoice,
+      preferPublished: true,
+      endpoint: "/api/rerank/vllm",
+    };
+    const first = await vllm.rerank(request);
+    const second = await vllm.rerank(request);
+    assert.strictEqual(first.index, 0);
+    assert.strictEqual(second.index, 0);
+    assert.strictEqual(calls, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+    vllm.clearCache?.();
+  }
+}
+
 async function testHealthReportsUnavailableWithoutThrowing() {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async () => {
@@ -77,6 +103,7 @@ async function testHealthReportsUnavailableWithoutThrowing() {
 (async () => {
   await testPostsGemmaPromptToVllmEndpoint();
   await testFallsBackToBestOnlyRerankJson();
+  await testCachesIdenticalRerankRequests();
   await testHealthReportsUnavailableWithoutThrowing();
   console.log("vLLM reranker tests passed");
 })();

@@ -34,6 +34,8 @@ npx serve docs -l 18088
 
 Open `http://127.0.0.1:18088/`. In this mode, WebGPU rerank runs in your browser on your local GPU when supported.
 
+On GitHub Pages alone, the optional `/api/arxiv/bibtex` lookup and metadata API proxies are unavailable because there is no backend server. Verification still works through direct CrossRef and Semantic Scholar requests from the published site; local proxy use adds arXiv BibTeX enrichment and avoids Semantic Scholar CORS blocks on `localhost`.
+
 Server with vLLM:
 
 ```bash
@@ -45,8 +47,10 @@ python3 -m venv .venv-vllm
 pip install vllm
 
 vllm serve google/gemma-4-E2B-it --host 127.0.0.1 --port 8000 --max-model-len 8192
-PORT=8088 VLLM_BASE_URL=http://127.0.0.1:8000 python3 server/vllm_proxy_server.py
+HOST=127.0.0.1 PORT=8088 VLLM_BASE_URL=http://127.0.0.1:8000 python3 server/vllm_proxy_server.py
 ```
+
+Use `HOST=127.0.0.1` when you only need local access. The proxy defaults to `0.0.0.0`, which exposes the static app and rerank endpoint on your LAN without authentication.
 
 Then open one of these addresses and choose `vLLM server` in the rerank engine menu:
 
@@ -82,9 +86,11 @@ For each cited sentence, the app maps the citation key to the BibTeX entry, fetc
 
 On GitHub Pages the judgement runs in the visitor's WebGPU-capable browser. On the local vLLM server, choose `Auto` or `vLLM server GPU` so judgement prompts run on the server GPU through `server/vllm_proxy_server.py`.
 
+Model answers with risk flags are escalated conservatively before display: for example, `topic_mismatch` downgrades `supported`/`weak` to `unsupported`, and `broad_claim` or `specific_result_claim` downgrades an overconfident `supported` answer to `weak`.
+
 ## Rerank Guardrails
 
-Ambiguous matches are limited to the top three candidates before LLM reranking. The model must return strict JSON with one of `verified`, `updated`, `needs_review`, or `not_found`, plus a fixed risk flag vocabulary. Any risky `updated` or `verified` answer is escalated to `needs_review` before export.
+Ambiguous matches are limited to the top three candidates before LLM reranking. The model must return strict JSON with one of `verified`, `updated`, `needs_review`, or `not_found`, plus a fixed risk flag vocabulary. Any risky `updated` or `verified` answer is escalated to `needs_review` during verification, before you review or export the file. Export is not blocked automatically; the UI keeps the escalated status visible so you can accept, revert, or exclude entries deliberately.
 
 ## Result States
 
@@ -94,7 +100,7 @@ Ambiguous matches are limited to the top three candidates before LLM reranking. 
 | Auto-updated | The paper matches, but metadata can be improved. |
 | Needs Review | The match is weak or important fields disagree. |
 | Not Found | No convincing indexed publication was found. |
-| Duplicate | Another entry appears to cite the same paper. |
+| Duplicate | Another entry appears to cite the same paper (matched by DOI, arXiv ID, or normalized title plus first author). |
 
 ## Privacy Model
 
@@ -117,7 +123,7 @@ Network activity is limited to:
 | `docs/citation-audit.js` | Citation context extraction, evidence lookup, and support judgement |
 | `docs/gemma-reranker.js` | Optional Gemma WebGPU rerank and judgement bridge |
 | `docs/vllm-reranker.js` | Optional local vLLM rerank bridge |
-| `server/vllm_proxy_server.py` | Static file server and vLLM OpenAI API proxy |
+| `server/vllm_proxy_server.py` | Static file server, metadata API proxy, and vLLM OpenAI API proxy |
 | `tests/test_lib.js` | Node tests for parsing and ranking helpers |
 
 ## Development

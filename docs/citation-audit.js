@@ -1,13 +1,29 @@
 (function (exports) {
   "use strict";
 
-  const SS_MATCH = "https://api.semanticscholar.org/graph/v1/paper/search/match";
-  const SS_PAPER = "https://api.semanticscholar.org/graph/v1/paper/";
   const SS_FIELDS = "title,abstract,tldr,authors,year,venue,publicationVenue,externalIds,url";
   const MAX_EVIDENCE_CHARS = 2600;
   const DOT_SENTINEL = "__CITATION_DOT__";
   const BANG_SENTINEL = "__CITATION_BANG__";
   const QUERY_SENTINEL = "__CITATION_QUERY__";
+  const EVIDENCE_LANGUAGE_STORAGE = "bv-evidence-language";
+  const MAX_RETRIES = 3;
+  const RETRY_BASE_MS = 500;
+
+  function useMetadataProxy() {
+    if (typeof window === "undefined" || !window.location) return false;
+    const { hostname, protocol } = window.location;
+    if (protocol === "file:") return false;
+    return !hostname.endsWith(".github.io");
+  }
+
+  const USE_METADATA_PROXY = useMetadataProxy();
+  const SS_MATCH = USE_METADATA_PROXY
+    ? "/api/semanticscholar/graph/v1/paper/search/match"
+    : "https://api.semanticscholar.org/graph/v1/paper/search/match";
+  const SS_PAPER = USE_METADATA_PROXY
+    ? "/api/semanticscholar/graph/v1/paper/"
+    : "https://api.semanticscholar.org/graph/v1/paper/";
 
   const CITE_COMMANDS = [
     "citep", "citet", "citealp", "citealt", "citeauthor", "citeyear",
@@ -15,6 +31,42 @@
   ].join("|");
   const LATEX_CITE_RE = new RegExp(`\\\\(?:${CITE_COMMANDS})(?:\\s*\\[[^\\]]*\\]){0,2}\\s*\\{([^}]+)\\}`, "g");
   const LATEX_CITE_WITH_OPTIONS_RE = new RegExp(`\\\\(?:${CITE_COMMANDS})(?:\\s*\\[[^\\]]*\\]){0,2}`, "g");
+
+  function normalizeEvidenceLanguage(value) {
+    const lang = String(value || "").toLowerCase();
+    return lang === "ko" || lang === "kor" || lang === "korean" ? "ko" : "en";
+  }
+
+  function evidenceLanguageInstruction(language) {
+    return normalizeEvidenceLanguage(language) === "ko"
+      ? "Write reason and evidence_quote in Korean."
+      : "Write reason and evidence_quote in English.";
+  }
+
+  function currentEvidenceLanguage() {
+    if (typeof document !== "undefined") {
+      const select = document.getElementById("opt-evidence-language");
+      if (select?.value) return normalizeEvidenceLanguage(select.value);
+    }
+    if (typeof localStorage !== "undefined")
+      return normalizeEvidenceLanguage(localStorage.getItem(EVIDENCE_LANGUAGE_STORAGE));
+    return "en";
+  }
+
+  function citationFallbackText(key, language) {
+    const lang = normalizeEvidenceLanguage(language);
+    const messages = {
+      missingEntry: {
+        en: "Citation key is not present in the BibTeX file.",
+        ko: "인용 키가 BibTeX 파일에 없습니다.",
+      },
+      missingEvidence: {
+        en: "No abstract or TLDR was available for this reference.",
+        ko: "이 참고문헌에는 판단에 필요한 초록이나 TLDR이 없습니다.",
+      },
+    };
+    return messages[key]?.[lang] || messages[key]?.en || "";
+  }
 
   function stripLatexNoise(text) {
     return String(text || "")
@@ -81,10 +133,35 @@
     return authors.map((author) => author?.name).filter(Boolean).slice(0, 8).join(" and ");
   }
 
+  function encodeDoiPath(doi) {
+    return String(doi || "")
+      .trim()
+      .split("/")
+      .map((part) => encodeURIComponent(part))
+      .join("/");
+  }
+
+  function semanticScholarPaperIdForDoi(doi) {
+    const path = encodeDoiPath(doi);
+    return path ? `DOI:${path}` : "";
+  }
+
+  function safeExternalUrl(value) {
+    const raw = String(value || "").trim();
+    if (!raw) return "";
+    try {
+      const url = new URL(raw);
+      return url.protocol === "http:" || url.protocol === "https:" ? url.href : "";
+    } catch (_err) {
+      return "";
+    }
+  }
+
   function paperUrlForEvidence(evidence, entry) {
-    if (evidence?.url) return evidence.url;
+    const evidenceUrl = safeExternalUrl(evidence?.url);
+    if (evidenceUrl) return evidenceUrl;
     const doi = evidence?.externalIds?.DOI || entry?.doi;
-    if (doi) return `https://doi.org/${encodeURIComponent(doi)}`;
+    if (doi) return `https://doi.org/${encodeDoiPath(doi)}`;
     if (entry?.title) return `https://www.semanticscholar.org/search?q=${encodeURIComponent(entry.title)}`;
     return "";
   }
@@ -115,28 +192,66 @@
     };
   }
 
-  async function fetchJson(url, params) {
-    const u = new URL(url);
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  function isTransientHttpStatus(status) {
+    return status === 429 || status === 502 || status === 503 || status === 504;
+  }
+
+  function retryDelayMs(response, attempt, baseDelayMs) {
+    const retryAfter = response?.headers?.get?.("Retry-After");
+    const seconds = Number(retryAfter);
+    if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
+    return baseDelayMs * Math.pow(2, attempt);
+  }
+
+  async function fetchJson(url, params, options = {}) {
+    const retries = Number.isInteger(options.retries) ? options.retries : MAX_RETRIES;
+    const baseDelayMs = Number.isFinite(options.baseDelayMs) ? options.baseDelayMs : RETRY_BASE_MS;
+    const u = new URL(url, window.location.origin);
     for (const [key, value] of Object.entries(params || {})) {
       if (value !== undefined && value !== null && value !== "") u.searchParams.set(key, value);
     }
-    const response = await fetch(u.toString());
-    if (!response.ok) return null;
-    return response.json();
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      try {
+        const response = await fetch(u.toString());
+        if (response.ok) return response.json();
+        if (!isTransientHttpStatus(response.status)) return null;
+        if (attempt < retries) {
+          const wait = retryDelayMs(response, attempt, baseDelayMs);
+          if (wait > 0) await sleep(wait);
+          continue;
+        }
+        throw new Error(`transient evidence lookup error ${response.status}`);
+      } catch (err) {
+        if (attempt < retries) {
+          const wait = baseDelayMs * Math.pow(2, attempt);
+          if (wait > 0) await sleep(wait);
+          continue;
+        }
+        throw err;
+      }
+    }
+    return null;
   }
 
   async function fetchEvidence(entry) {
     if (!entry) return normalizeEvidence(null, null);
     const doi = entry.doi || entry.DOI;
-    if (doi) {
-      const paper = await fetchJson(`${SS_PAPER}DOI:${encodeURIComponent(doi)}`, { fields: SS_FIELDS });
-      if (paper) return normalizeEvidence(paper, entry);
+    try {
+      if (doi) {
+        const paperId = semanticScholarPaperIdForDoi(doi);
+        const paper = await fetchJson(`${SS_PAPER}${paperId}`, { fields: SS_FIELDS });
+        if (paper) return normalizeEvidence(paper, entry);
+      }
+      if (entry.title) {
+        const matched = await fetchJson(SS_MATCH, { query: entry.title, fields: SS_FIELDS });
+        if (matched?.data?.[0]) return normalizeEvidence(matched.data[0], entry);
+      }
+      return normalizeEvidence(null, entry);
+    } catch (err) {
+      return { ...normalizeEvidence(null, entry), lookupError: err.message || String(err) };
     }
-    if (entry.title) {
-      const matched = await fetchJson(SS_MATCH, { query: entry.title, fields: SS_FIELDS });
-      if (matched?.data?.[0]) return normalizeEvidence(matched.data[0], entry);
-    }
-    return normalizeEvidence(null, entry);
   }
 
   function shortEvidenceText(evidence) {
@@ -148,7 +263,7 @@
     return text.length > MAX_EVIDENCE_CHARS ? `${text.slice(0, MAX_EVIDENCE_CHARS)}...` : text;
   }
 
-  function buildPrompt({ context, entry, evidence }) {
+  function buildPrompt({ context, entry, evidence, language }) {
     const evidenceText = shortEvidenceText(evidence);
     return [
       "Judge whether the cited paper supports the cited sentence from a manuscript.",
@@ -159,6 +274,8 @@
       "Use unsupported when the sentence makes a claim contradicted by, unrelated to, or much stronger than the evidence.",
       "Use insufficient_evidence when abstract/TLDR/full evidence is missing or too thin to judge.",
       "Allowed risk_flags: missing_abstract, broad_claim, specific_result_claim, topic_mismatch, citation_key_missing, metadata_only.",
+      "JSON keys, verdict values, and risk_flags must remain in English even when reason or evidence_quote uses another language.",
+      evidenceLanguageInstruction(language),
       "Do not invent evidence. Keep reason under 24 words.",
       "",
       `Citation key: ${context.key}`,
@@ -203,14 +320,33 @@
     const riskFlags = Array.isArray(parsed?.risk_flags)
       ? parsed.risk_flags.map((flag) => String(flag || "").toLowerCase()).filter(Boolean)
       : [];
-    return {
+    return applyRiskFlagGuardrails({
       verdict,
       confidence: Number.isFinite(confidence) ? Math.max(0, Math.min(1, confidence)) : null,
       reason: typeof parsed?.reason === "string" ? parsed.reason : "",
       evidenceQuote: typeof parsed?.evidence_quote === "string" ? parsed.evidence_quote : "",
       riskFlags,
       raw: String(text || ""),
-    };
+    });
+  }
+
+  function applyRiskFlagGuardrails(judgement) {
+    const flags = new Set(judgement?.riskFlags || []);
+    if (!flags.size) return judgement;
+
+    let verdict = judgement.verdict;
+    if (flags.has("topic_mismatch")) {
+      if (verdict === "supported" || verdict === "weak") verdict = "unsupported";
+    } else if (flags.has("specific_result_claim") && verdict === "supported") {
+      verdict = "weak";
+    } else if (flags.has("broad_claim") && verdict === "supported") {
+      verdict = "weak";
+    } else if (verdict === "supported") {
+      verdict = "weak";
+    }
+
+    if (verdict === judgement.verdict) return judgement;
+    return { ...judgement, verdict };
   }
 
   async function completeWithVllm(prompt, onStatus) {
@@ -218,7 +354,7 @@
     const response = await fetch("/api/rerank/vllm", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt, candidate_count: 1 }),
+      body: JSON.stringify({ prompt, candidate_count: 1, max_tokens: 220 }),
     });
     if (!response.ok) throw new Error(`vLLM judgement failed with HTTP ${response.status}`);
     const data = await response.json();
@@ -231,14 +367,25 @@
     return !!health?.ready;
   }
 
-  async function judgeCitation({ context, entry, evidence, provider, onStatus }) {
+  async function judgeCitation({ context, entry, evidence, provider, language, onStatus }) {
+    const evidenceLanguage = normalizeEvidenceLanguage(language);
     if (!entry) {
       return {
         verdict: "insufficient_evidence",
         confidence: 1,
-        reason: "Citation key is not present in the BibTeX file.",
+        reason: citationFallbackText("missingEntry", evidenceLanguage),
         evidenceQuote: "",
         riskFlags: ["citation_key_missing"],
+        raw: "",
+      };
+    }
+    if (evidence?.lookupError) {
+      return {
+        verdict: "insufficient_evidence",
+        confidence: 0.95,
+        reason: evidence.lookupError,
+        evidenceQuote: "",
+        riskFlags: ["lookup_failed"],
         raw: "",
       };
     }
@@ -246,14 +393,14 @@
       return {
         verdict: "insufficient_evidence",
         confidence: 0.92,
-        reason: "No abstract or TLDR was available for this reference.",
+        reason: citationFallbackText("missingEvidence", evidenceLanguage),
         evidenceQuote: evidence?.title || entry.title || "",
         riskFlags: ["missing_abstract", "metadata_only"],
         raw: "",
       };
     }
 
-    const prompt = buildPrompt({ context, entry, evidence });
+    const prompt = buildPrompt({ context, entry, evidence, language: evidenceLanguage });
     let selectedProvider = provider || "auto";
     if (selectedProvider === "auto") selectedProvider = await detectVllmReady() ? "vllm" : "webgpu";
     const output = selectedProvider === "vllm"
@@ -276,7 +423,8 @@
       .replace(/&/g, "&amp;")
       .replace(/</g, "&lt;")
       .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;");
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
   }
 
   function renderResults(container, results) {
@@ -286,7 +434,7 @@
       return;
     }
     container.innerHTML = results.map((result) => {
-      const url = result.evidence?.url || "";
+      const url = safeExternalUrl(result.evidence?.url);
       const flags = result.judgement.riskFlags?.length
         ? `<div class="citation-flags">${result.judgement.riskFlags.map(escapeHtml).join(", ")}</div>`
         : "";
@@ -337,6 +485,49 @@
         });
       });
     });
+  }
+
+  function currentSpeedMode() {
+    if (typeof document !== "undefined") {
+      const select = document.getElementById("opt-speed-mode");
+      if (select?.value) return select.value;
+    }
+    return "balanced";
+  }
+
+  function citationAuditConcurrency() {
+    const mode = currentSpeedMode();
+    if (mode === "fast") return 3;
+    if (mode === "thorough") return 1;
+    return 2;
+  }
+
+  function judgementCacheKey(context, entry, evidence) {
+    return JSON.stringify([
+      context?.key || "",
+      context?.sentence || "",
+      entry?.title || "",
+      entry?.year || "",
+      evidence?.title || "",
+      evidence?.abstract || evidence?.tldr || "",
+    ]);
+  }
+
+  async function runBoundedQueue(items, worker, options = {}) {
+    const list = Array.from(items || []);
+    const concurrency = Math.max(1, Math.floor(Number(options.concurrency || 1)));
+    const results = new Array(list.length);
+    let nextIndex = 0;
+    async function runWorker() {
+      while (nextIndex < list.length) {
+        const index = nextIndex++;
+        const result = await worker(list[index], index);
+        results[index] = result;
+        if (typeof options.onResult === "function") options.onResult(result, index);
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(concurrency, list.length) }, () => runWorker()));
+    return results;
   }
 
   function bindFileInput(input, textarea) {
@@ -390,26 +581,40 @@
 
       runButton.disabled = true;
       try {
-        for (let i = 0; i < contexts.length; i++) {
-          const context = contexts[i];
+        const judgementCache = new Map();
+        await runBoundedQueue(contexts, async (context, i) => {
           const entry = entriesByKey.get(context.key);
-          statusEl.textContent = `Checking ${i + 1}/${contexts.length}: ${context.key}`;
-          let evidence = evidenceCache.get(context.key);
-          if (!evidence) {
-            evidence = await fetchEvidence(entry);
-            evidenceCache.set(context.key, evidence);
+          let evidencePromise = evidenceCache.get(context.key);
+          if (!evidencePromise) {
+            evidencePromise = fetchEvidence(entry);
+            evidenceCache.set(context.key, evidencePromise);
           }
-          const judgement = await judgeCitation({
-            context,
-            entry,
-            evidence,
-            provider: "auto",
-            onStatus: (message) => { statusEl.textContent = `${context.key}: ${message}`; },
-          });
-          results.push({ context, entry, evidence, judgement });
-          updateSummary(root, results);
-          renderResults(resultsEl, results);
-        }
+          const evidence = await evidencePromise;
+          const key = judgementCacheKey(context, entry, evidence);
+          let judgementPromise = judgementCache.get(key);
+          if (!judgementPromise) {
+            judgementPromise = judgeCitation({
+              context,
+              entry,
+              evidence,
+              provider: "auto",
+              language: currentEvidenceLanguage(),
+              onStatus: (message) => { statusEl.textContent = `${context.key}: ${message}`; },
+            });
+            judgementCache.set(key, judgementPromise);
+          }
+          const judgement = await judgementPromise;
+          return { context, entry, evidence, judgement };
+        }, {
+          concurrency: citationAuditConcurrency(),
+          onResult: (result, i) => {
+            results[i] = result;
+            const visibleResults = results.filter(Boolean);
+            statusEl.textContent = `Checked ${visibleResults.length}/${contexts.length}: ${result.context.key}`;
+            updateSummary(root, visibleResults);
+            renderResults(resultsEl, visibleResults);
+          },
+        });
         statusEl.textContent = `Finished ${contexts.length} citation checks.`;
       } catch (err) {
         statusEl.textContent = `Citation audit stopped: ${err.message}`;
@@ -423,7 +628,15 @@
   exports.extractCitationContexts = extractCitationContexts;
   exports.mapEntriesByKey = mapEntriesByKey;
   exports.buildPrompt = buildPrompt;
+  exports.encodeDoiPath = encodeDoiPath;
+  exports.safeExternalUrl = safeExternalUrl;
+  exports.paperUrlForEvidence = paperUrlForEvidence;
+  exports.fetchJson = fetchJson;
+  exports.isTransientHttpStatus = isTransientHttpStatus;
+  exports.semanticScholarPaperIdForDoi = semanticScholarPaperIdForDoi;
   exports.parseJudgement = parseJudgement;
+  exports.applyRiskFlagGuardrails = applyRiskFlagGuardrails;
+  exports.judgeCitation = judgeCitation;
   exports.summarize = summarize;
   exports.initCitationAudit = initCitationAudit;
 

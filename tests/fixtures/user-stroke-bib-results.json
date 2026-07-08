@@ -1,0 +1,410 @@
+{
+  "summary": {
+    "verified": 0,
+    "updated": 3,
+    "needs_review": 0,
+    "not_found": 0,
+    "error": 22
+  },
+  "rows": [
+    {
+      "id": "feigin2022world",
+      "type": "article",
+      "status": "error",
+      "titleScore": 0,
+      "duplicateOf": "",
+      "styleIssues": [
+        "author:others"
+      ],
+      "diffCount": 0,
+      "topDiffs": [],
+      "foundSource": "",
+      "foundDoi": "",
+      "reason": "transient upstream error 429"
+    },
+    {
+      "id": "campbell2019ischaemic",
+      "type": "article",
+      "status": "error",
+      "titleScore": 0,
+      "duplicateOf": "",
+      "styleIssues": [
+        "author:others"
+      ],
+      "diffCount": 0,
+      "topDiffs": [],
+      "foundSource": "",
+      "foundDoi": "",
+      "reason": "transient upstream error 429"
+    },
+    {
+      "id": "san2018imaging",
+      "type": "article",
+      "status": "error",
+      "titleScore": 0,
+      "duplicateOf": "",
+      "styleIssues": [
+        "author:others",
+        "latex:accents"
+      ],
+      "diffCount": 0,
+      "topDiffs": [],
+      "foundSource": "",
+      "foundDoi": "",
+      "reason": "transient upstream error 429"
+    },
+    {
+      "id": "mouridsen2020artificial",
+      "type": "article",
+      "status": "updated",
+      "titleScore": 100,
+      "duplicateOf": "",
+      "styleIssues": [],
+      "diffCount": 1,
+      "topDiffs": [
+        {
+          "field": "doi",
+          "score": 0,
+          "original": "",
+          "found": "10.1161/STROKEAHA.119.027479"
+        }
+      ],
+      "foundSource": "semantic_scholar",
+      "foundDoi": "10.1161/STROKEAHA.119.027479",
+      "reason": ""
+    },
+    {
+      "id": "dosovitskiy2020image",
+      "type": "article",
+      "status": "error",
+      "titleScore": 0,
+      "duplicateOf": "",
+      "styleIssues": [
+        "author:others",
+        "venue:arxiv-preprint"
+      ],
+      "diffCount": 0,
+      "topDiffs": [],
+      "foundSource": "",
+      "foundDoi": "",
+      "reason": "transient upstream error 429"
+    },
+    {
+      "id": "he2022masked",
+      "type": "inproceedings",
+      "status": "error",
+      "titleScore": 0,
+      "duplicateOf": "",
+      "styleIssues": [],
+      "diffCount": 0,
+      "topDiffs": [],
+      "foundSource": "",
+      "foundDoi": "",
+      "reason": "transient upstream error 429"
+    },
+    {
+      "id": "lee2023llm",
+      "type": "article",
+      "status": "error",
+      "titleScore": 0,
+      "duplicateOf": "",
+      "styleIssues": [
+        "venue:arxiv-preprint"
+      ],
+      "diffCount": 0,
+      "topDiffs": [],
+      "foundSource": "",
+      "foundDoi": "",
+      "reason": "transient upstream error 429"
+    },
+    {
+      "id": "singhal2023towards",
+      "type": "article",
+      "status": "error",
+      "titleScore": 0,
+      "duplicateOf": "",
+      "styleIssues": [
+        "author:others",
+        "venue:arxiv-preprint"
+      ],
+      "diffCount": 0,
+      "topDiffs": [],
+      "foundSource": "",
+      "foundDoi": "",
+      "reason": "transient upstream error 429"
+    },
+    {
+      "id": "lewis2020retrieval",
+      "type": "article",
+      "status": "error",
+      "titleScore": 0,
+      "duplicateOf": "",
+      "styleIssues": [
+        "author:others"
+      ],
+      "diffCount": 0,
+      "topDiffs": [],
+      "foundSource": "",
+      "foundDoi": "",
+      "reason": "transient upstream error 429"
+    },
+    {
+      "id": "hu2021lora",
+      "type": "article",
+      "status": "error",
+      "titleScore": 0,
+      "duplicateOf": "",
+      "styleIssues": [
+        "author:others",
+        "venue:arxiv-preprint"
+      ],
+      "diffCount": 0,
+      "topDiffs": [],
+      "foundSource": "",
+      "foundDoi": "",
+      "reason": "transient upstream error 429"
+    },
+    {
+      "id": "powers2019guidelines",
+      "type": "article",
+      "status": "error",
+      "titleScore": 0,
+      "duplicateOf": "",
+      "styleIssues": [
+        "author:others"
+      ],
+      "diffCount": 0,
+      "topDiffs": [],
+      "foundSource": "",
+      "foundDoi": "",
+      "reason": "transient upstream error 429"
+    },
+    {
+      "id": "hernandez2022isles",
+      "type": "article",
+      "status": "error",
+      "titleScore": 0,
+      "duplicateOf": "",
+      "styleIssues": [
+        "author:others"
+      ],
+      "diffCount": 0,
+      "topDiffs": [],
+      "foundSource": "",
+      "foundDoi": "",
+      "reason": "transient upstream error 429"
+    },
+    {
+      "id": "alfaro2018image",
+      "type": "article",
+      "status": "error",
+      "titleScore": 0,
+      "duplicateOf": "",
+      "styleIssues": [
+        "author:others"
+      ],
+      "diffCount": 0,
+      "topDiffs": [],
+      "foundSource": "",
+      "foundDoi": "",
+      "reason": "transient upstream error 429"
+    },
+    {
+      "id": "li2023llava",
+      "type": "article",
+      "status": "error",
+      "titleScore": 0,
+      "duplicateOf": "",
+      "styleIssues": [
+        "author:others"
+      ],
+      "diffCount": 0,
+      "topDiffs": [],
+      "foundSource": "",
+      "foundDoi": "",
+      "reason": "transient upstream error 429"
+    },
+    {
+      "id": "herzog2020integrating",
+      "type": "article",
+      "status": "error",
+      "titleScore": 0,
+      "duplicateOf": "",
+      "styleIssues": [],
+      "diffCount": 0,
+      "topDiffs": [],
+      "foundSource": "",
+      "foundDoi": "",
+      "reason": "transient upstream error 429"
+    },
+    {
+      "id": "cetinoglu2021detection",
+      "type": "article",
+      "status": "error",
+      "titleScore": 0,
+      "duplicateOf": "",
+      "styleIssues": [],
+      "diffCount": 0,
+      "topDiffs": [],
+      "foundSource": "",
+      "foundDoi": "",
+      "reason": "transient upstream error 429"
+    },
+    {
+      "id": "tasci2022deep",
+      "type": "article",
+      "status": "error",
+      "titleScore": 0,
+      "duplicateOf": "",
+      "styleIssues": [],
+      "diffCount": 0,
+      "topDiffs": [],
+      "foundSource": "",
+      "foundDoi": "",
+      "reason": "transient upstream error 429"
+    },
+    {
+      "id": "lee2023automatic",
+      "type": "article",
+      "status": "error",
+      "titleScore": 0,
+      "duplicateOf": "",
+      "styleIssues": [],
+      "diffCount": 0,
+      "topDiffs": [],
+      "foundSource": "",
+      "foundDoi": "",
+      "reason": "transient upstream error 429"
+    },
+    {
+      "id": "koska2024deep",
+      "type": "article",
+      "status": "error",
+      "titleScore": 0,
+      "duplicateOf": "",
+      "styleIssues": [
+        "latex:accents"
+      ],
+      "diffCount": 0,
+      "topDiffs": [],
+      "foundSource": "",
+      "foundDoi": "",
+      "reason": "transient upstream error 429"
+    },
+    {
+      "id": "Huo_2024_CVPR",
+      "type": "inproceedings",
+      "status": "error",
+      "titleScore": 0,
+      "duplicateOf": "",
+      "styleIssues": [
+        "pages:single-dash"
+      ],
+      "diffCount": 0,
+      "topDiffs": [],
+      "foundSource": "",
+      "foundDoi": "",
+      "reason": "transient upstream error 429"
+    },
+    {
+      "id": "ma2024learningmodalityknowledgealignment",
+      "type": "article",
+      "status": "error",
+      "titleScore": 0,
+      "duplicateOf": "",
+      "styleIssues": [
+        "venue:arxiv-preprint"
+      ],
+      "diffCount": 0,
+      "topDiffs": [],
+      "foundSource": "",
+      "foundDoi": "",
+      "reason": "transient upstream error 429"
+    },
+    {
+      "id": "Liu2023-ej",
+      "type": "article",
+      "status": "updated",
+      "titleScore": 100,
+      "duplicateOf": "",
+      "styleIssues": [
+        "author:others"
+      ],
+      "diffCount": 2,
+      "topDiffs": [
+        {
+          "field": "journal",
+          "score": 63,
+          "original": "Commun. Med. (Lond.)",
+          "found": "Communications Medicine"
+        },
+        {
+          "field": "doi",
+          "score": 0,
+          "original": "",
+          "found": "10.1038/s43856-023-00327-4"
+        }
+      ],
+      "foundSource": "semantic_scholar",
+      "foundDoi": "10.1038/s43856-023-00327-4",
+      "reason": ""
+    },
+    {
+      "id": "shalev2014understanding",
+      "type": "book",
+      "status": "error",
+      "titleScore": 0,
+      "duplicateOf": "",
+      "styleIssues": [],
+      "diffCount": 0,
+      "topDiffs": [],
+      "foundSource": "",
+      "foundDoi": "",
+      "reason": "transient upstream error 429"
+    },
+    {
+      "id": "dubey2024llama",
+      "type": "article",
+      "status": "error",
+      "titleScore": 0,
+      "duplicateOf": "",
+      "styleIssues": [
+        "author:others",
+        "venue:arxiv-eprints"
+      ],
+      "diffCount": 0,
+      "topDiffs": [],
+      "foundSource": "",
+      "foundDoi": "",
+      "reason": "transient upstream error 429"
+    },
+    {
+      "id": "medgemma2024",
+      "type": "misc",
+      "status": "updated",
+      "titleScore": 100,
+      "duplicateOf": "",
+      "styleIssues": [
+        "author:others"
+      ],
+      "diffCount": 2,
+      "topDiffs": [
+        {
+          "field": "year",
+          "score": 0,
+          "original": "2025",
+          "found": "2026"
+        },
+        {
+          "field": "journal",
+          "score": 0,
+          "original": "",
+          "found": "arXiv"
+        }
+      ],
+      "foundSource": "arxiv",
+      "foundDoi": "",
+      "reason": ""
+    }
+  ]
+}
