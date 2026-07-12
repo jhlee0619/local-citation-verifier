@@ -109,7 +109,7 @@
     while (i < str.length) {
       const c = str[i];
       if (c === "\\" && i + 1 < str.length) {
-        buf += str[i + 1];
+        buf += c + str[i + 1];
         i += 2;
         continue;
       }
@@ -276,6 +276,93 @@
       entries.push(entry);
     }
     return entries;
+  }
+
+  function scanBibtexEntryStructure(content, openIndex, openChar) {
+    const braceOffsets = openChar === "{" ? [openIndex] : [];
+    const entryFieldDepth = braceOffsets.length;
+    let inQuote = false;
+    let quoteOffset = -1;
+
+    for (let i = openIndex + 1; i < content.length; i++) {
+      const c = content[i];
+      if (c === "\\") {
+        if (i + 1 >= content.length)
+          return { diagnostic: { offset: i, reason: "unterminated_escape" } };
+        i++;
+        continue;
+      }
+      if (c === '"') {
+        if (inQuote) {
+          inQuote = false;
+          quoteOffset = -1;
+        } else {
+          let previous = i - 1;
+          while (previous > openIndex && /\s/.test(content[previous])) previous--;
+          if (braceOffsets.length === entryFieldDepth &&
+              (content[previous] === "=" || content[previous] === "#")) {
+            inQuote = true;
+            quoteOffset = i;
+          }
+        }
+        continue;
+      }
+      if (c === "{") {
+        braceOffsets.push(i);
+        continue;
+      }
+      if (c === "}") {
+        if (!braceOffsets.length)
+          return { diagnostic: { offset: i, reason: "unexpected_closing_brace" } };
+        braceOffsets.pop();
+        if (openChar === "{" && !braceOffsets.length) {
+          if (inQuote)
+            return { diagnostic: { offset: quoteOffset, reason: "unterminated_quote" } };
+          return { closeIndex: i };
+        }
+        continue;
+      }
+      if (openChar === "(" && c === ")" && !inQuote && !braceOffsets.length)
+        return { closeIndex: i };
+    }
+
+    if (inQuote)
+      return { diagnostic: { offset: quoteOffset, reason: "unterminated_quote" } };
+    const offset = braceOffsets.length ? braceOffsets[braceOffsets.length - 1] : openIndex;
+    return { diagnostic: { offset, reason: "unterminated_brace" } };
+  }
+
+  function validateBibtexStructure(content) {
+    let i = 0;
+    while (i < content.length) {
+      const at = content.indexOf("@", i);
+      if (at === -1) return null;
+      const typeMatch = /^@([A-Za-z][\w-]*)\s*/.exec(content.slice(at));
+      if (!typeMatch) {
+        i = at + 1;
+        continue;
+      }
+      const openIndex = skipWhitespace(content, at + typeMatch[0].length);
+      const openChar = content[openIndex];
+      if (openChar !== "{" && openChar !== "(") {
+        i = at + 1;
+        continue;
+      }
+      const scanned = scanBibtexEntryStructure(content, openIndex, openChar);
+      if (scanned.diagnostic) return scanned.diagnostic;
+      i = scanned.closeIndex + 1;
+    }
+    return null;
+  }
+
+  function parseBibDocument(content) {
+    const source = typeof content === "string" ? content : String(content ?? "");
+    const diagnostic = validateBibtexStructure(source);
+    return {
+      source,
+      diagnostic,
+      entries: diagnostic ? [] : parseBib(source),
+    };
   }
 
   // ─── Unicode → LaTeX escaping (optional export for pdfLaTeX/BibTeX) ───
@@ -1997,6 +2084,7 @@
   exports.normalizeTitle = normalizeTitle;
   exports.looseTitleText = looseTitleText;
   exports.parseBib = parseBib;
+  exports.parseBibDocument = parseBibDocument;
   exports.entriesToBib = entriesToBib;
   exports.unicodeToLatex = unicodeToLatex;
   exports.tokenSortRatio = tokenSortRatio;

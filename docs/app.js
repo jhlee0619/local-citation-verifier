@@ -629,6 +629,7 @@
   // ─── UI State ──────────────────────────────────────────────────────
   let parsedEntries = [];
   let results = [];
+  let currentInputValid = false;
   let decisions = {};
   let fieldEdits = {};
   let activeFilter = "all";
@@ -669,6 +670,7 @@
   const barProgressFill = $(".bar-progress-fill");
   const barProgressText = $(".bar-progress-text");
   const btnDownload = $("#btn-download");
+  btnDownload.disabled = true;
   const mainColumns = $("#main-columns");
   const colPreview = $("#col-preview");
   const previewPanelEl = $("#preview-panel");
@@ -748,12 +750,13 @@
   const btnVerifyPaste = $("#btn-verify-paste");
 
   btnVerifyPaste.addEventListener("click", () => {
-    const content = bibPaste.value.trim();
-    if (!content) { alert("Please paste your BibTeX content first."); return; }
+    const content = bibPaste.value;
+    if (!content.trim()) { alert("Please paste your BibTeX content first."); return; }
     startVerificationFromContent(content, "Parsing pasted content...");
   });
 
   function startVerificationFromContent(content, statusMsg) {
+    currentInputValid = false;
     onboardingResumeAfterCurrentRun =
       pendingOnboardingResumeClick ||
       document.body.dataset.onboardingStage === "verify" ||
@@ -763,6 +766,7 @@
 
     closeOnboarding();
     results = [];
+    currentPreviewBib = "";
     decisions = {};
     fieldEdits = {};
     activeFilter = "all";
@@ -786,6 +790,7 @@
     barProgressText.textContent = statusMsg;
     btnDownload.classList.add("hidden");
     btnDownload.classList.remove("fade-in");
+    btnDownload.disabled = true;
     floatingBar.classList.add("visible");
 
     mainColumns.classList.add("two-col");
@@ -795,7 +800,16 @@
     previewCode.textContent = "";
     syncPreviewPanelCollapsed();
 
-    parsedEntries = B.parseBib(content);
+    const parsedDocument = B.parseBibDocument(content);
+    if (parsedDocument.diagnostic) {
+      const { offset, reason } = parsedDocument.diagnostic;
+      parsedEntries = [];
+      alert(`BibTeX parse error at offset ${offset}: ${reason}. Nothing was verified or exported.`);
+      floatingBar.classList.remove("visible");
+      onboardingResumeAfterCurrentRun = false;
+      return;
+    }
+    parsedEntries = parsedDocument.entries;
 
     if (!parsedEntries.length) {
       alert("No BibTeX entries found. Make sure the content contains valid @type{key, ...} entries.");
@@ -804,6 +818,7 @@
       return;
     }
 
+    currentInputValid = true;
     resultsSection.style.display = "block";
     barProgressText.textContent = `Verifying 0 / ${parsedEntries.length} entries...`;
     runVerification();
@@ -914,14 +929,18 @@
       },
     });
 
+    if (!currentInputValid) return;
     barProgressFill.classList.add("done");
     barProgressText.textContent = `Done — ${total} entries verified`;
     const resumeOnboardingAfterResults = onboardingResumeAfterCurrentRun;
     onboardingResumeAfterCurrentRun = false;
     setTimeout(() => {
+      if (!currentInputValid) return;
       barProgress.classList.add("fade-out");
       setTimeout(() => {
+        if (!currentInputValid) return;
         barProgress.classList.remove("active", "fade-out");
+        btnDownload.disabled = false;
         btnDownload.classList.remove("hidden");
         btnDownload.classList.add("fade-in");
         if (resumeOnboardingAfterResults)
@@ -2128,7 +2147,7 @@
   }
 
   function updatePreview() {
-    if (!parsedEntries.length) return;
+    if (!currentInputValid || !parsedEntries.length) return;
     currentPreviewBib = buildPreviewBib();
     const origBib = buildOriginalBib();
     previewPlaceholder.style.display = "none";
@@ -2138,7 +2157,7 @@
 
   const btnCopy = $("#btn-copy-preview");
   btnCopy.addEventListener("click", () => {
-    if (!currentPreviewBib) return;
+    if (!currentInputValid || !currentPreviewBib) return;
     navigator.clipboard.writeText(currentPreviewBib).then(() => {
       btnCopy.classList.add("copied");
       const origHTML = btnCopy.innerHTML;
@@ -2325,6 +2344,7 @@
 
   // ─── Download ─────────────────────────────────────────────────────
   btnDownload.addEventListener("click", () => {
+    if (!currentInputValid || btnDownload.disabled || !results.length) return;
     const bibContent = currentPreviewBib || buildPreviewBib();
     const blob = new Blob([bibContent], { type: "application/x-bibtex" });
     const url = URL.createObjectURL(blob);

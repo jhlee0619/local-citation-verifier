@@ -105,6 +105,101 @@ test("handles double-quoted field values", () => {
   assert.strictEqual(entries[0].title, "Quoted Title");
 });
 
+test("preserves every escape pair in quoted values without corrupting following data", () => {
+  const bib = String.raw`@article{escaped,
+  title = "Using \LaTeX with H{\"a}ni and \{braces\}",
+  note = "literal \\ slash, escaped quote \"inside\", and final \\",
+  year = "2024",
+}
+@book{following,
+  title = "Following Entry",
+  year = "2025",
+}`;
+  const entries = lib.parseBib(bib);
+
+  assert.strictEqual(entries.length, 2);
+  assert.strictEqual(entries[0].title, String.raw`Using \LaTeX with H{\"a}ni and \{braces\}`);
+  assert.strictEqual(entries[0].note, String.raw`literal \\ slash, escaped quote \"inside\", and final \\`);
+  assert.strictEqual(entries[0].year, "2024");
+  assert.strictEqual(entries[1].ID, "following");
+  assert.strictEqual(entries[1].title, "Following Entry");
+});
+
+test("quoted escape values survive parse serialize parse round trips", () => {
+  const source = String.raw`@article{roundtrip,
+  title = "\LaTeX and H{\"a}ni",
+  note = "\{kept\}, \\, \"quoted\", final \\",
+  year = "2024",
+}`;
+  const first = lib.parseBib(source);
+  const serialized = lib.entriesToBib(first);
+  const second = lib.parseBib(serialized);
+
+  assert.deepStrictEqual(second, first);
+  assert.ok(serialized.includes(String.raw`\LaTeX and H{\"a}ni`));
+  assert.ok(serialized.includes(String.raw`\{kept\}, \\, \"quoted\", final \\`));
+});
+
+test("strict document parsing rejects malformed structure without partial entries", () => {
+  const unterminatedQuote = '@article{ok, title={Complete}}\n@article{bad, title="unterminated}';
+  const unterminatedEscape = '@article{bad, title="unterminated' + "\\";
+  const cases = [
+    {
+      source: unterminatedQuote,
+      reason: "unterminated_quote",
+      offset: unterminatedQuote.lastIndexOf('"'),
+    },
+    {
+      source: "@article{bad, title={unterminated}",
+      reason: "unterminated_brace",
+      offset: 8,
+    },
+    {
+      source: unterminatedEscape,
+      reason: "unterminated_escape",
+      offset: unterminatedEscape.length - 1,
+    },
+  ];
+
+  for (const { source, reason, offset } of cases) {
+    const parsed = lib.parseBibDocument(source);
+    assert.strictEqual(parsed.source, source);
+    assert.deepStrictEqual(parsed.entries, []);
+    assert.strictEqual(parsed.diagnostic.reason, reason);
+    assert.strictEqual(parsed.diagnostic.offset, offset);
+  }
+});
+
+test("strict document parsing accepts escaped delimiters and parenthesized entries", () => {
+  const source = String.raw`@article(ok,
+  title = "Escaped \"quote\" and final \\",
+  note = {Escaped \{ braces \}},
+  year = 2024,
+)`;
+  const parsed = lib.parseBibDocument(source);
+
+  assert.strictEqual(parsed.source, source);
+  assert.strictEqual(parsed.diagnostic, null);
+  assert.strictEqual(parsed.entries.length, 1);
+  assert.strictEqual(parsed.entries[0].ID, "ok");
+});
+
+test("strict document parsing does not treat quotes inside braced values as delimiters", () => {
+  const source = '@article{inch, title={A 5" Disk Study}, year={2024}}';
+  const parsed = lib.parseBibDocument(source);
+
+  assert.strictEqual(parsed.diagnostic, null);
+  assert.strictEqual(parsed.entries[0].title, 'A 5" Disk Study');
+});
+
+test("strict document parsing ignores assignment-like text inside braced values", () => {
+  const source = '@article{draft, note={status = "draft}, year={2024}}';
+  const parsed = lib.parseBibDocument(source);
+
+  assert.strictEqual(parsed.diagnostic, null);
+  assert.strictEqual(parsed.entries[0].note, 'status = "draft');
+});
+
 test("handles numeric field values", () => {
   const bib = `@article{test, title={Test}, year=2023}`;
   const entries = lib.parseBib(bib);
