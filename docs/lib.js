@@ -698,7 +698,7 @@
   }
 
   function compareEntry(original, found) {
-    const comparableFound = preservePublishedVenue(original, found || {});
+    const comparableFound = { ...(found || {}) };
     const origTitle = original.title || "";
     const foundTitle = comparableFound.title || "";
     const titleScore = tokenSortRatio(normalizeTitle(origTitle), normalizeTitle(foundTitle));
@@ -893,7 +893,7 @@
     };
     if (isProceedings) out.booktitle = venue;
     else out.journal = venue;
-    return cleanBibliographyEntry(out);
+    return out;
   }
 
   function openreviewValue(value) {
@@ -959,7 +959,7 @@
       out.booktitle = booktitle;
       delete out.journal;
     }
-    return cleanBibliographyEntry(out);
+    return out;
   }
 
   // ─── Paper matching helpers ──────────────────────────────────────────
@@ -1001,64 +1001,6 @@
       if (inter / Math.max(aa.size, ba.size) < 0.3) return false;
     }
     return true;
-  }
-
-  function shouldSkipPreprintMergeField(field, primary, secondary) {
-    const primaryVenue = candidateVenue(primary);
-    const secondaryVenue = candidateVenue(secondary);
-    const primaryLooksPublished = primaryVenue && !isPreprintVenue(primaryVenue);
-    const secondaryLooksPreprint = secondaryVenue && isPreprintVenue(secondaryVenue);
-    return primaryLooksPublished && secondaryLooksPreprint && [
-      "journal",
-      "booktitle",
-      "volume",
-      "number",
-      "pages",
-      "publisher",
-    ].includes(field);
-  }
-
-  function mergeMetadata(primary, secondary) {
-    const merged = { ...primary };
-    for (const [k, v] of Object.entries(secondary)) {
-      if (k.startsWith("_")) continue;
-      if (shouldSkipPreprintMergeField(k, primary, secondary)) continue;
-      if (!merged[k] && v) merged[k] = v;
-    }
-
-    const primaryVenue = candidateVenue(primary);
-    const secondaryVenue = candidateVenue(secondary);
-    const secondaryLooksPublished = secondaryVenue && !isPreprintVenue(secondaryVenue);
-    if (secondaryLooksPublished && (!primaryVenue || isPreprintVenue(primaryVenue))) {
-      if (secondary.booktitle) {
-        merged.booktitle = secondary.booktitle;
-        if (merged.journal && isPreprintVenue(merged.journal)) delete merged.journal;
-      } else {
-        merged.journal = secondary.journal;
-        if (merged.booktitle && isPreprintVenue(merged.booktitle)) delete merged.booktitle;
-      }
-    }
-
-    const primaryYear = String(primary?.year || "").trim();
-    const secondaryYear = String(secondary?.year || "").trim();
-    const secondaryHasBibliographicProof = !!(
-      secondary?.doi ||
-      secondary?._dblpKey ||
-      /(?:crossref|dblp|openreview)/i.test(String(secondary?._source || ""))
-    );
-    if (
-      primaryYear &&
-      secondaryYear &&
-      primaryYear !== secondaryYear &&
-      secondaryLooksPublished &&
-      secondaryHasBibliographicProof &&
-      (isOneYearPublicationDrift(primary, secondary) || hasSameDoi(primary, secondary))
-    ) {
-      merged.year = secondaryYear;
-    }
-
-    merged._source = `${primary._source || ""}+${secondary._source || ""}`;
-    return merged;
   }
 
   function isCorrectionTitle(title) {
@@ -1466,40 +1408,18 @@
   }
 
   function applyCandidateToEntry(original, candidate) {
-    const out = { ...original };
-    const safeCandidate = preservePublishedVenue(original, candidate);
-    for (const [field, value] of Object.entries(safeCandidate || {})) {
-      if (field.startsWith("_") || field === "ENTRYTYPE" || field === "ID") continue;
+    const out = {
+      ENTRYTYPE: candidate?.ENTRYTYPE || original?.ENTRYTYPE || "misc",
+      ID: original?.ID || candidate?.ID || "entry",
+    };
+    for (const [field, value] of Object.entries(candidate || {})) {
+      if (field.startsWith("_") || field === "ID") continue;
       if (!value) continue;
-      const originalValue = original?.[field] || "";
-      if (originalValue && compareField(field, originalValue, value) >= 100) continue;
-      if (field === "author" && originalValue && shouldSuppressAuthorSuggestion(originalValue, value)) continue;
       out[field] = value;
     }
-
-    const originalArxivId = extractArxivId(original);
-    const candidateArxivId = extractArxivId(safeCandidate);
-    const arxivYear = arxivYearFromId(candidateArxivId);
-    const originalYear = String(original?.year || "").trim();
-    const originalVenueName = candidateVenue(original);
-    const rawCandidateVenueName = candidateVenue(candidate);
-    const candidateLooksPreprint = !rawCandidateVenueName || isPreprintVenue(rawCandidateVenueName);
-    const originalLooksPublished = originalVenueName && !isPreprintVenue(originalVenueName);
-    if (
-      originalArxivId &&
-      candidateArxivId === originalArxivId &&
-      originalYear &&
-      out.year &&
-      out.year !== originalYear &&
-      candidateLooksPreprint &&
-      (originalYear === arxivYear || originalLooksPublished)
-    ) {
-      out.year = originalYear;
-    }
-
     if ((out.ENTRYTYPE || "").toLowerCase() === "inproceedings" && out.booktitle)
       delete out.journal;
-    return cleanBibliographyEntry(out);
+    return out;
   }
 
   function isPreprintVenue(venue) {
@@ -1514,44 +1434,7 @@
   }
 
   function preservePublishedVenue(original, candidate) {
-    const out = { ...(candidate || {}) };
-    const originalJournal = original?.journal || "";
-    const originalBooktitle = original?.booktitle || "";
-    const originalVenue = originalJournal || originalBooktitle;
-    const candidateVenue = out.journal || out.booktitle || "";
-    const candidateIsPreprint = candidateVenue && isPreprintVenue(candidateVenue);
-    const originalYear = String(original?.year || "").trim();
-    const candidateYear = String(out.year || "").trim();
-    const originalLooksPublished = originalVenue && !isPreprintVenue(originalVenue);
-    const candidateLooksPublished = candidateVenue && !candidateIsPreprint;
-    const originalYearNumber = Number(originalYear);
-    const candidateYearNumber = Number(candidateYear);
-    const oneYearPublicationDrift =
-      Number.isInteger(originalYearNumber) &&
-      Number.isInteger(candidateYearNumber) &&
-      Math.abs(originalYearNumber - candidateYearNumber) <= 1;
-    if (originalYear && candidateYear && candidateYear !== originalYear && (
-      candidateIsPreprint ||
-      (originalLooksPublished && candidateLooksPublished && oneYearPublicationDrift)
-    )) {
-      out.year = originalYear;
-    }
-    if (!candidateVenue || isPreprintVenue(originalVenue) || !candidateIsPreprint)
-      return out;
-
-    if (originalJournal) {
-      out.journal = originalJournal;
-      if (out.booktitle && isPreprintVenue(out.booktitle)) delete out.booktitle;
-    } else if (originalBooktitle) {
-      out.booktitle = originalBooktitle;
-      if (out.journal && isPreprintVenue(out.journal)) delete out.journal;
-    }
-
-    if (out.publisher && isPreprintVenue(out.publisher)) {
-      if (original?.publisher) out.publisher = original.publisher;
-      else delete out.publisher;
-    }
-    return out;
+    return { ...(candidate || {}) };
   }
 
   function sourceNames(candidate) {
@@ -1593,7 +1476,7 @@
     const candidateVenueValue = candidate?.journal || candidate?.booktitle || "";
     if (originalVenue && candidateVenueValue && !isPreprintVenue(originalVenue) && isPreprintVenue(candidateVenueValue)) {
       badges.push({ label: "preprint venue", tone: "warn" });
-      warnings.push(`Original published venue "${originalVenue}" is preserved over candidate preprint venue "${candidateVenueValue}".`);
+      warnings.push(`Published venue "${originalVenue}" and preprint venue "${candidateVenueValue}" remain separate record alternatives.`);
     }
 
     if (hasCriticalMetadataConflict(original || {}, candidate || {})) {
@@ -1645,28 +1528,7 @@
   }
 
   function preferPublishedVenueUpgrade(candidate, suggested) {
-    const fromCandidate = publishedVenueFromCandidate(candidate);
-    if (fromCandidate) return fromCandidate;
-    const fromSuggested = suggested?.journal || suggested?.booktitle || "";
-    if (fromSuggested && !isPreprintVenue(fromSuggested)) return fromSuggested;
-    return "";
-  }
-
-  function candidateKeys(candidate) {
-    const keys = [];
-    const doi = normalizeText(candidate.doi || "");
-    const title = normalizeTitle(candidate.title || "");
-    const venue = normalizeText(candidate.journal || candidate.booktitle || "");
-    if (doi) keys.push(`doi:${doi}`);
-    const arxivId = normalizeText(candidate._arxivId || candidate.eprint || "");
-    const archive = normalizeText(candidate.archiveprefix || candidate.archivePrefix || "");
-    if (arxivId && (archive === "arxiv" || candidate._arxivId)) keys.push(`arxiv:${arxivId}`);
-    if (title && venue) keys.push(`title:${title}|venue:${venue}`);
-    return keys;
-  }
-
-  function isAuthoritativeCandidate(candidate) {
-    return (candidate?._source || "").includes("arxiv");
+    return publishedVenueFromCandidate(candidate);
   }
 
   function candidateVenue(candidate) {
@@ -1678,36 +1540,21 @@
     return !!venue && !isPreprintVenue(venue);
   }
 
-  function shouldReplaceDuplicate(existing, candidate) {
-    if (isPublishedCandidate(candidate) && !isPublishedCandidate(existing))
-      return true;
-    return isAuthoritativeCandidate(candidate) &&
-      isPreprintVenue(candidateVenue(existing)) &&
-      !isAuthoritativeCandidate(existing);
-  }
-
   function dedupeCandidates(candidates) {
-    const seen = new Set();
-    const keyToIndex = new Map();
-    const unique = [];
-    for (const candidate of candidates) {
+    const byRecord = new Map();
+    for (const candidate of candidates || []) {
       if (!candidate) continue;
-      const keys = candidateKeys(candidate);
-      const duplicateIndex = keys.map(key => keyToIndex.get(key)).find(index => index !== undefined);
-      if (duplicateIndex !== undefined) {
-        if (shouldReplaceDuplicate(unique[duplicateIndex], candidate)) {
-          unique[duplicateIndex] = candidate;
-          keys.forEach(key => keyToIndex.set(key, duplicateIndex));
-        }
-        continue;
-      }
-      keys.forEach(key => {
-        seen.add(key);
-        keyToIndex.set(key, unique.length);
-      });
-      unique.push(candidate);
+      const source = candidate._recordSource || candidate._source || "unknown";
+      const payload = Object.keys(candidate).filter(key => !key.startsWith("_")).sort()
+        .map(key => `${key}:${String(candidate[key] ?? "").trim()}`).join("\u001f");
+      const recordId = candidate._recordId || `fp:${payload}`;
+      const key = `${source}\u001f${recordId}`;
+      const existing = byRecord.get(key);
+      if (!existing || payload < existing.payload)
+        byRecord.set(key, { candidate, payload, key });
     }
-    return unique;
+    return [...byRecord.values()].sort((a, b) => a.key.localeCompare(b.key) || a.payload.localeCompare(b.payload))
+      .map(item => item.candidate);
   }
 
   function candidateScore(candidate, original, options = {}) {
@@ -1747,7 +1594,7 @@
         score: candidateScore(candidate, original, options),
       }))
       .filter(item => item.score !== -Infinity)
-      .sort((a, b) => b.score - a.score || a.index - b.index)
+      .sort((a, b) => b.score - a.score || candidateStableKey(a.candidate).localeCompare(candidateStableKey(b.candidate)))
       .slice(0, limit)
       .map(item => item.candidate);
   }
@@ -1759,7 +1606,7 @@
     let bestScore = -Infinity;
     unique.forEach((candidate, index) => {
       const score = candidateScore(candidate, original, options);
-      if (score > bestScore) {
+      if (score > bestScore || (score === bestScore && best && candidateStableKey(candidate) < candidateStableKey(best))) {
         best = candidate;
         bestIndex = index;
         bestScore = score;
@@ -1771,6 +1618,10 @@
       candidates: unique,
       score: bestScore,
     };
+  }
+
+  function candidateStableKey(candidate) {
+    return `${candidate?._recordSource || candidate?._source || "unknown"}\u001f${candidate?._recordId || ""}\u001f${normalizeTitle(candidate?.title || "")}\u001f${candidate?.year || ""}`;
   }
 
 
@@ -2046,7 +1897,10 @@
     const upper = name.toUpperCase().trim();
     for (const [full, abbr] of Object.entries(VENUE_ABBREVIATIONS)) {
       if (upper === abbr.toUpperCase()) {
-        return full.replace(/\b\w/g, c => c.toUpperCase());
+        const smallWords = new Set(["and", "for", "in", "of", "on", "the", "to", "with"]);
+        return full.split(" ").map((word, index) => (
+          index > 0 && smallWords.has(word) ? word : word.replace(/^\w/, c => c.toUpperCase())
+        )).join(" ");
       }
     }
     return name;
@@ -2107,8 +1961,8 @@
   exports.openreviewToStandard = openreviewToStandard;
   exports.extractLastNames = extractLastNames;
   exports.isSamePaper = isSamePaper;
-  exports.mergeMetadata = mergeMetadata;
   exports.isCorrectionTitle = isCorrectionTitle;
+  exports.normalizeDoiValue = normalizeDoiValue;
   exports.normalizeArxivId = normalizeArxivId;
   exports.extractArxivId = extractArxivId;
   exports.extractPrefixedArxivId = extractPrefixedArxivId;
