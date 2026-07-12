@@ -273,12 +273,12 @@
             <label class="option-toggle">
               <span>Max authors:</span>
               <select id="opt-max-authors" class="option-select">
-                <option value="0">All</option>
+                <option value="0" selected>All</option>
                 <option value="1">1</option>
                 <option value="2">2</option>
                 <option value="3">3</option>
                 <option value="5">5</option>
-                <option value="10" selected>10</option>
+                <option value="10">10</option>
               </select>
             </label>
           </div>
@@ -343,9 +343,10 @@
   <script src="https://unpkg.com/fuzzball@2.2.3/dist/fuzzball.umd.min.js"></script>
   <script src="lib.js?v=20260712-atomic-candidates"></script>
   <script src="atomic-candidates.js?v=20260712-atomic-candidates"></script>
+  <script src="decision-policy.js?v=20260712-explicit-decisions"></script>
   <script src="gemma-reranker.js?v=20260622-evidence-language"></script>
   <script src="vllm-reranker.js?v=20260622-evidence-language"></script>
   <script src="citation-audit.js?v=20260622-xss-hardening"></script>
-  <script src="app.js?v=20260712-atomic-candidates"></script>
+  <script src="app.js?v=20260712-explicit-decisions"></script>
 </body>
 </html>

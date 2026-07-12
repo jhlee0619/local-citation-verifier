@@ -3,6 +3,7 @@
 
   const B = window.BibLib;
   const A = window.BibAtomicCandidates;
+  const D = window.BibDecisionPolicy;
 
   // ─── Configuration ───────────────────────────────────────────────────
   function useMetadataProxy() {
@@ -498,6 +499,7 @@
         candidate._recordId === selection.canonical._recordId,
       _canonicalStatus: selection.status,
       _canonicalReason: selection.reason,
+      _directLinkKind: selection.linkKind,
       _selectedVersionClass: selection.selectedVersionClass,
     };
   }
@@ -606,8 +608,9 @@
   let results = [];
   let currentInputValid = false;
   let currentRunSnapshot = null;
-  let decisions = {};
-  let fieldEdits = {};
+  let decisionStore = D.createStore();
+  let decisions = decisionStore.decisions;
+  let fieldEdits = decisionStore.fieldEdits;
   let activeFilter = "all";
   let activeSearch = "";
 
@@ -747,8 +750,9 @@
     results = [];
     currentPreviewBib = "";
     currentPreviewState = null;
-    decisions = {};
-    fieldEdits = {};
+    decisionStore = D.createStore();
+    decisions = decisionStore.decisions;
+    fieldEdits = decisionStore.fieldEdits;
     activeFilter = "all";
     activeSearch = "";
     const searchInputEl = document.getElementById("entry-search-input");
@@ -835,7 +839,7 @@
     }
 
     if (lookupError) {
-      const r = buildResult(entry, index, "needs_review", 0, [], {}, null);
+      const r = buildResult(entry, index, "lookup_failed", 0, [], {}, null);
       r.lookup_error = lookupError.message || String(lookupError);
       return r;
     }
@@ -891,13 +895,7 @@
           pending.then(patchedFound => {
             if (!patchedFound || results[i]?.pending_rerank !== pending) return;
             const currentDecision = decisions[i];
-            if (currentDecision?.touched || Object.values(fieldEdits[i] || {}).some(edit => edit?.touched))
-              return;
-            const stillDefaultCandidate = !currentDecision ||
-              (currentDecision.action === "candidate" &&
-                currentDecision.source === r.candidate_choices?.[r.selected_candidate_index]?._recordSource &&
-                currentDecision.candidateId === r.candidate_choices?.[r.selected_candidate_index]?._recordId);
-            if (!stillDefaultCandidate) return;
+            const preserveDecision = currentDecision && !D.canApplySuggestion(currentDecision, fieldEdits[i] || {});
 
             const entry = parsedEntries[i];
             const cmp = B.compareEntry(entry, patchedFound);
@@ -914,6 +912,16 @@
               fieldDiffs = [];
             }
             const patched = buildResult(entry, i, finalStatus, cmp.title_score, fieldDiffs, cmp.suggested, patchedFound);
+            if (preserveDecision) {
+              decisions[i] = currentDecision;
+              const preservedCandidate = D.resolveCandidate(patched.candidate_choices, currentDecision);
+              patched.selected_choice = currentDecision.action === "exclude"
+                ? "exclude"
+                : preservedCandidate ? "candidate" : "original";
+              patched.selected_candidate_index = preservedCandidate
+                ? patched.candidate_choices.indexOf(preservedCandidate)
+                : -1;
+            }
             patched.pending_rerank = null;
             results[i] = patched;
             renderEntryCard(patched);
@@ -947,19 +955,19 @@
 
   function buildResult(entry, index, status, titleScore, fieldDiffs, suggested, found) {
     const candidateChoices = found ? (found._candidateChoices || []) : [];
-    const defaultCandidateIndex = candidateChoices.length && found?._autoEligible === true ? 0 : -1;
-    if (defaultCandidateIndex >= 0) {
-      const candidate = candidateChoices[defaultCandidateIndex];
-      decisions[index] = {
-        action: "candidate",
-        candidateIndex: defaultCandidateIndex,
-        source: candidate._recordSource,
-        candidateId: candidate._recordId,
-        touched: false,
-      };
-    } else {
-      decisions[index] = { action: "original", source: "original", touched: false };
-    }
+    const proposedCandidate = candidateChoices[0] && found ? {
+      ...candidateChoices[0],
+      _autoEligible: found._autoEligible,
+      _canonicalStatus: found._canonicalStatus,
+      _canonicalReason: found._canonicalReason,
+      _directLinkKind: found._directLinkKind,
+      _selectedVersionClass: found._selectedVersionClass,
+      _enrichmentNeedsReview: found._enrichmentNeedsReview,
+    } : null;
+    const outcome = D.initialOutcome(status, proposedCandidate, 0);
+    status = outcome.status;
+    decisions[index] = outcome.decision;
+    const defaultCandidateIndex = outcome.decision.action === "candidate" ? 0 : -1;
 
     return {
       index,
@@ -988,7 +996,19 @@
 
   // ─── Rendering ────────────────────────────────────────────────────
   function statusLabel(s) {
-    return { verified: "Verified", updated: "Auto-Updated", needs_review: "Needs Review", not_found: "Not Found" }[s] || s;
+    return {
+      verified: "Verified",
+      updated: "Auto-Updated",
+      needs_review: "Needs Review",
+      lookup_failed: "Lookup Failed",
+      cancelled: "Cancelled",
+      parse_failed: "Parse Failed",
+      not_found: "Not Found",
+    }[s] || s;
+  }
+
+  function summaryStatus(status) {
+    return ["lookup_failed", "cancelled", "parse_failed"].includes(status) ? "needs_review" : status;
   }
 
   function selectedChoiceKind(r) {
@@ -1010,10 +1030,7 @@
   function setUserFieldEdit(index, field, action, value, extra = {}) {
     if (!fieldEdits[index]) fieldEdits[index] = {};
     const candidate = suggestedCandidateForResult(results[index]);
-    let provenance = { actor: "user", source: "original" };
-    if (action === "found" && candidate) provenance = A.userProvenance(candidate);
-    if (action === "custom") provenance = A.manualProvenance();
-    fieldEdits[index][field] = { action, value, touched: true, provenance, ...extra };
+    fieldEdits[index][field] = D.fieldEdit(action, value, { candidate, extra });
   }
 
   function isInternalBibField(field) {
@@ -1142,7 +1159,7 @@
     const card = document.createElement("div");
     card.className = `entry-card status-${r.status}`;
     card.classList.toggle("is-excluded", r.selected_choice === "exclude");
-    card.dataset.status = r.status;
+    card.dataset.status = summaryStatus(r.status);
     card.dataset.index = r.index;
     if (r.duplicate_of) card.dataset.duplicate = "true";
 
@@ -1301,7 +1318,7 @@
       duplicateHTML = `<div class="duplicate-row">Duplicate of <strong>${esc(r.duplicate_of)}</strong></div>`;
 
     let reviewHintHTML = "";
-    if (r.status === "needs_review" && r.lookup_error) {
+    if (r.status === "lookup_failed" && r.lookup_error) {
       reviewHintHTML = `<div class="review-hint">${esc(tEvidence("lookupFailed"))}</div>`;
     } else if (r.status === "needs_review" && r.found_title) {
       const aiReason = r.ai_reason
@@ -1424,13 +1441,7 @@
     if (!r || !entry || !candidate) return;
 
     const next = statusForCandidate(entry, candidate);
-    decisions[entryIndex] = {
-      action: "candidate",
-      candidateIndex,
-      source: candidate._recordSource,
-      candidateId: candidate._recordId,
-      touched: true,
-    };
+    decisions[entryIndex] = D.candidateDecision(candidate, candidateIndex);
     fieldEdits[entryIndex] = {};
     r.status = next.status;
     r.title_score = next.cmp.title_score;
@@ -1448,7 +1459,7 @@
   function applyOriginalChoice(entryIndex) {
     const r = results[entryIndex];
     if (!r) return;
-    decisions[entryIndex] = { action: "original", source: "original", touched: true };
+    decisions[entryIndex] = D.originalDecision(true);
     fieldEdits[entryIndex] = {};
     r.selected_choice = "original";
     renderEntryCard(r);
@@ -1459,7 +1470,7 @@
   function applyExcludeChoice(entryIndex) {
     const r = results[entryIndex];
     if (!r) return;
-    decisions[entryIndex] = { action: "exclude", source: "user", touched: true };
+    decisions[entryIndex] = D.excludeDecision();
     fieldEdits[entryIndex] = {};
     r.selected_choice = "exclude";
     renderEntryCard(r);
@@ -1876,7 +1887,8 @@
     const c = { verified: 0, updated: 0, needs_review: 0, not_found: 0 };
     let dupes = 0;
     results.forEach(r => {
-      c[r.status] = (c[r.status] || 0) + 1;
+      const status = summaryStatus(r.status);
+      c[status] = (c[status] || 0) + 1;
       if (r.duplicate_of) dupes++;
     });
     $(".badge-verified .summary-count").textContent = c.verified;
@@ -1957,7 +1969,10 @@
 
         // Set fieldEdits for this entry
         if (!fieldEdits[idx]) fieldEdits[idx] = {};
-        fieldEdits[idx].author = { action: "found", value: truncated, _injected: true };
+        fieldEdits[idx].author = D.fieldEdit("custom", truncated, {
+          provenance: D.provenance("user", "setting:max_authors"),
+          extra: { _injected: true },
+        });
 
         // Find or create the diff table
         let diffTable = card.querySelector(".diff-table:not(.fields-table)");
@@ -2031,7 +2046,7 @@
       const effectiveStatus = B.displayStatusForCard(savedStatus, { hasVisibleDiffs, hasInjectedRows });
 
       // Update card visuals
-      card.dataset.status = effectiveStatus;
+      card.dataset.status = summaryStatus(effectiveStatus);
       card.className = card.className.replace(/status-\S+/, `status-${effectiveStatus}`);
       const tag = card.querySelector(".status-tag:not(.tag-duplicate):not(.tag-excluded)");
       if (tag) {
@@ -2066,60 +2081,33 @@
   }
 
   // ─── Live preview ────────────────────────────────────────────────
-  function resolveDecisionCandidate(result, decision) {
-    if (decision.action !== "candidate") return null;
-    const stableMatch = result.candidate_choices?.find(candidate =>
-      candidate._recordSource === decision.source && candidate._recordId === decision.candidateId
-    );
-    if (decision.source || decision.candidateId) return stableMatch || null;
-    return result.candidate_choices?.[decision.candidateIndex] || null;
-  }
-
   function buildPreviewState() {
     const s = getSettings();
     const count = results.length;
     let projected = parsedEntries.slice(0, count).map((entry, i) => {
       const r = results[i];
-      const originalProvenance = Object.fromEntries(A.CORE_FIELDS.map(field => [field, {
-        actor: "system", source: "original", candidateId: entry.ID || `entry_${i}`,
-      }]));
-      if (!r) return { entry: { ...entry }, provenance: originalProvenance, mixed: false };
-      const decision = decisions[i] || {};
+      const decision = decisions[i] || D.originalDecision(false);
+      if (!r) return D.applyDecision({
+        original: entry,
+        candidates: [],
+        decision,
+        fieldEdits: {},
+        applyCandidate: B.applyCandidateToEntry,
+        coreFields: A.CORE_FIELDS,
+      });
       if (decision.action === "exclude") return null;
       if (s.removeNotFound && r.status === "not_found") return null;
 
-      const selectedCandidate = resolveDecisionCandidate(r, decision);
-      const out = selectedCandidate
-        ? B.applyCandidateToEntry(entry, selectedCandidate)
-        : { ...entry };
-      const provenance = { ...originalProvenance };
-      if (selectedCandidate) {
-        for (const field of A.CORE_FIELDS) {
-          if (selectedCandidate[field]) provenance[field] = {
-            actor: decision.touched ? "user" : "system",
-            source: selectedCandidate._recordSource,
-            candidateId: selectedCandidate._recordId,
-          };
-        }
-      }
-      const edits = fieldEdits[i] || {};
-      for (const [field, fe] of Object.entries(edits)) {
-        if (!fe) continue;
-        if (fe.action === "found" || fe.action === "custom") {
-          if (fe.value) {
-            out[field] = fe.value;
-            if (A.CORE_FIELDS.includes(field)) provenance[field] = fe.provenance ||
-              (fe.action === "custom" ? A.manualProvenance() : A.userProvenance(selectedCandidate));
-          }
-        } else if (fe.action === "original") {
-          if ((entry[field] || "").trim()) out[field] = entry[field];
-          else delete out[field];
-          if (A.CORE_FIELDS.includes(field)) provenance[field] = fe.provenance || { actor: "user", source: "original" };
-        } else if (fe.action === "remove") {
-          delete out[field];
-          if (A.CORE_FIELDS.includes(field)) provenance[field] = fe.provenance || { actor: "user", source: "manual" };
-        }
-      }
+      const state = D.applyDecision({
+        original: entry,
+        candidates: r.candidate_choices,
+        decision,
+        fieldEdits: fieldEdits[i] || {},
+        applyCandidate: B.applyCandidateToEntry,
+        coreFields: A.CORE_FIELDS,
+      });
+      const out = state.entry;
+      const provenance = state.provenance;
 
       if (s.maxAuthors > 0 && out.author && r.status !== "not_found") {
         const limitedAuthor = truncateAuthors(out.author, s.maxAuthors);
@@ -2131,7 +2119,7 @@
       if ((out.ENTRYTYPE || "").toLowerCase() === "inproceedings" && out.booktitle)
         delete out.journal;
       const sources = new Set(Object.values(provenance).map(value => `${value.source}\u001f${value.candidateId || ""}`));
-      const state = { entry: out, provenance, mixed: sources.size > 1 };
+      state.mixed = sources.size > 1;
       r.preview_provenance = provenance;
       r.mixed_core_warning = state.mixed;
       return state;

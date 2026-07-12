@@ -28,14 +28,17 @@ sources.forEach(source => assert.ok(app.includes(`"${source}"`), `missing provid
 assert.ok(app.includes("const preferPublished = runSnapshot.preferPublished"));
 assert.ok(app.includes("originals: Object.freeze(parsedEntries.map"));
 assert.ok(app.includes("function buildPreviewState()"));
-assert.ok(
-  app.includes("if (decision.source || decision.candidateId) return stableMatch || null;"),
-  "stable candidate identity mismatch must fail closed instead of using a stale index",
-);
-assert.ok(app.includes("source: candidate._recordSource"));
-assert.ok(app.includes("candidateId: candidate._recordId"));
-assert.ok(app.includes("A.userProvenance(candidate)"));
-assert.ok(app.includes("A.manualProvenance()"));
+assert.ok(app.includes("const D = window.BibDecisionPolicy"));
+assert.ok(app.includes("decisionStore = D.createStore()"));
+assert.ok(app.includes("D.initialOutcome(status, proposedCandidate, 0)"));
+assert.ok(app.includes("D.canApplySuggestion(currentDecision, fieldEdits[i] || {})"));
+assert.ok(app.includes("D.candidateDecision(candidate, candidateIndex)"));
+assert.ok(app.includes("D.originalDecision(true)"));
+assert.ok(app.includes("D.fieldEdit(action, value, { candidate, extra })"));
+assert.ok(app.includes('D.provenance("user", "setting:max_authors")'));
+assert.ok(app.includes("const state = D.applyDecision({"));
+assert.ok(app.includes('buildResult(entry, index, "lookup_failed"'));
+assert.ok(!/decisions\[[^\]]+\]\s*=\s*\{/.test(app), "decision literals must stay inside decision-policy.js");
 assert.ok(app.includes("preview-mixed-source-warning"));
 assert.match(
   app,
@@ -49,7 +52,10 @@ assert.ok(
 
 const libIndex = html.indexOf("lib.js?v=");
 const atomicIndex = html.indexOf("atomic-candidates.js?v=");
+const decisionIndex = html.indexOf("decision-policy.js?v=");
 const appIndex = html.indexOf("app.js?v=");
-assert.ok(libIndex >= 0 && atomicIndex > libIndex && appIndex > atomicIndex);
+assert.ok(libIndex >= 0 && atomicIndex > libIndex && decisionIndex > atomicIndex && appIndex > decisionIndex);
+assert.match(html, /<option value="0" selected>All<\/option>/);
+assert.doesNotMatch(html, /<option value="10" selected>/);
 
 console.log("atomic application contract tests passed");
