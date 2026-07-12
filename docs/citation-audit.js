@@ -196,7 +196,30 @@
     };
   }
 
-  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  function abortReason(signal, fallback) {
+    if (!signal?.aborted) return null;
+    if (signal.reason instanceof Error) return signal.reason;
+    if (fallback instanceof Error && fallback.name === "AbortError") return fallback;
+    const error = new Error(typeof signal.reason === "string" ? signal.reason : "citation audit cancelled");
+    error.name = "AbortError";
+    error.kind = "cancelled";
+    error.reason = signal.reason;
+    return error;
+  }
+
+  function sleep(ms, options = {}) {
+    const requestApi = typeof window !== "undefined" ? window.BibRequest : null;
+    if (requestApi?.sleep) return requestApi.sleep(ms, options);
+    const error = abortReason(options.signal);
+    if (error) return Promise.reject(error);
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(finish, Math.max(0, Number(ms) || 0));
+      function cleanup() { options.signal?.removeEventListener?.("abort", onAbort); }
+      function finish() { cleanup(); resolve(); }
+      function onAbort() { clearTimeout(timer); cleanup(); reject(abortReason(options.signal)); }
+      options.signal?.addEventListener?.("abort", onAbort, { once: true });
+    });
+  }
 
   function isTransientHttpStatus(status) {
     return status === 429 || status === 502 || status === 503 || status === 504;
@@ -212,25 +235,31 @@
   async function fetchJson(url, params, options = {}) {
     const retries = Number.isInteger(options.retries) ? options.retries : MAX_RETRIES;
     const baseDelayMs = Number.isFinite(options.baseDelayMs) ? options.baseDelayMs : RETRY_BASE_MS;
-    const u = new URL(url, window.location.origin);
+    const origin = options.origin || (typeof window !== "undefined" ? window.location.origin : "http://localhost");
+    const fetchFn = options.fetch || fetch;
+    const u = new URL(url, origin);
     for (const [key, value] of Object.entries(params || {})) {
       if (value !== undefined && value !== null && value !== "") u.searchParams.set(key, value);
     }
     for (let attempt = 0; attempt <= retries; attempt++) {
       try {
-        const response = await fetch(u.toString());
+        const priorAbort = abortReason(options.signal);
+        if (priorAbort) throw priorAbort;
+        const response = await fetchFn(u.toString(), { signal: options.signal });
         if (response.ok) return response.json();
         if (!isTransientHttpStatus(response.status)) return null;
         if (attempt < retries) {
           const wait = retryDelayMs(response, attempt, baseDelayMs);
-          if (wait > 0) await sleep(wait);
+          if (wait > 0) await sleep(wait, { signal: options.signal });
           continue;
         }
         throw new Error(`transient evidence lookup error ${response.status}`);
       } catch (err) {
+        const cancelled = abortReason(options.signal, err);
+        if (cancelled || err?.kind === "cancelled" || err?.name === "AbortError") throw cancelled || err;
         if (attempt < retries) {
           const wait = baseDelayMs * Math.pow(2, attempt);
-          if (wait > 0) await sleep(wait);
+          if (wait > 0) await sleep(wait, { signal: options.signal });
           continue;
         }
         throw err;
@@ -239,21 +268,23 @@
     return null;
   }
 
-  async function fetchEvidence(entry) {
+  async function fetchEvidence(entry, options = {}) {
     if (!entry) return normalizeEvidence(null, null);
     const doi = entry.doi || entry.DOI;
     try {
       if (doi) {
         const paperId = semanticScholarPaperIdForDoi(doi);
-        const paper = await fetchJson(`${SS_PAPER}${paperId}`, { fields: SS_FIELDS });
+        const paper = await fetchJson(`${SS_PAPER}${paperId}`, { fields: SS_FIELDS }, options);
         if (paper) return normalizeEvidence(paper, entry);
       }
       if (entry.title) {
-        const matched = await fetchJson(SS_MATCH, { query: entry.title, fields: SS_FIELDS });
+        const matched = await fetchJson(SS_MATCH, { query: entry.title, fields: SS_FIELDS }, options);
         if (matched?.data?.[0]) return normalizeEvidence(matched.data[0], entry);
       }
       return normalizeEvidence(null, entry);
     } catch (err) {
+      const cancelled = abortReason(options.signal, err);
+      if (cancelled || err?.kind === "cancelled" || err?.name === "AbortError") throw cancelled || err;
       return { ...normalizeEvidence(null, entry), lookupError: err.message || String(err) };
     }
   }
@@ -353,25 +384,26 @@
     return { ...judgement, verdict };
   }
 
-  async function completeWithVllm(prompt, onStatus) {
+  async function completeWithVllm(prompt, onStatus, signal) {
     onStatus?.("Judging citation support with local vLLM server...");
     const response = await fetch("/api/rerank/vllm", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ prompt, candidate_count: 1, max_tokens: 220 }),
+      signal,
     });
     if (!response.ok) throw new Error(`vLLM judgement failed with HTTP ${response.status}`);
     const data = await response.json();
     return String(data.output || "");
   }
 
-  async function detectVllmReady() {
+  async function detectVllmReady(signal) {
     if (!window.BibVllmReranker?.health) return false;
-    const health = await window.BibVllmReranker.health();
+    const health = await window.BibVllmReranker.health(undefined, { signal });
     return !!health?.ready;
   }
 
-  async function judgeCitation({ context, entry, evidence, provider, language, onStatus }) {
+  async function judgeCitation({ context, entry, evidence, provider, language, onStatus, signal }) {
     const evidenceLanguage = normalizeEvidenceLanguage(language);
     if (!entry) {
       return {
@@ -405,9 +437,13 @@
     }
 
     const prompt = buildPrompt({ context, entry, evidence, language: evidenceLanguage });
+    const priorAbort = abortReason(signal);
+    if (priorAbort) throw priorAbort;
     let selectedProvider = provider || "auto";
     if (selectedProvider === "auto") {
-      const vllmReady = await detectVllmReady();
+      const vllmReady = await detectVllmReady(signal);
+      const healthAbort = abortReason(signal);
+      if (healthAbort) throw healthAbort;
       selectedProvider = vllmReady
         ? "vllm"
         : window.BibGemmaReranker?.isEnabled?.() ? "webgpu" : "off";
@@ -423,8 +459,8 @@
       };
     }
     const output = selectedProvider === "vllm"
-      ? await completeWithVllm(prompt, onStatus)
-      : await window.BibGemmaReranker.completePrompt(prompt, { maxNewTokens: 220, onStatus });
+      ? await completeWithVllm(prompt, onStatus, signal)
+      : await window.BibGemmaReranker.completePrompt(prompt, { maxNewTokens: 220, onStatus, signal });
     return parseJudgement(output);
   }
 
@@ -514,8 +550,7 @@
     return "balanced";
   }
 
-  function citationAuditConcurrency() {
-    const mode = currentSpeedMode();
+  function citationAuditConcurrency(mode = currentSpeedMode()) {
     if (mode === "fast") return 3;
     if (mode === "thorough") return 1;
     return 2;
@@ -532,28 +567,64 @@
     ]);
   }
 
-  async function runBoundedQueue(items, worker, options = {}) {
-    const list = Array.from(items || []);
-    const concurrency = Math.max(1, Math.floor(Number(options.concurrency || 1)));
-    const results = new Array(list.length);
-    let nextIndex = 0;
-    async function runWorker() {
-      while (nextIndex < list.length) {
-        const index = nextIndex++;
-        const result = await worker(list[index], index);
-        results[index] = result;
-        if (typeof options.onResult === "function") options.onResult(result, index);
+  async function runAuditContexts(options) {
+    const controller = options.controller || window.BibRunController.defaultController;
+    const queue = options.queue || window.BibLib.runBoundedQueue;
+    const fetchEvidenceFn = options.fetchEvidenceFn || fetchEvidence;
+    const judgeCitationFn = options.judgeCitationFn || judgeCitation;
+    const { runContext, contexts, entriesByKey } = options;
+    const evidenceCache = new Map();
+    const judgementCache = new Map();
+    return queue(contexts, async (citationContext) => {
+      const entry = entriesByKey.get(citationContext.key);
+      let evidencePromise = evidenceCache.get(citationContext.key);
+      if (!evidencePromise) {
+        evidencePromise = fetchEvidenceFn(entry, { signal: runContext.signal });
+        evidenceCache.set(citationContext.key, evidencePromise);
       }
-    }
-    await Promise.all(Array.from({ length: Math.min(concurrency, list.length) }, () => runWorker()));
-    return results;
+      const evidence = await evidencePromise;
+      if (!controller.isActive(runContext)) return null;
+      const key = judgementCacheKey(citationContext, entry, evidence);
+      let judgementPromise = judgementCache.get(key);
+      if (!judgementPromise) {
+        judgementPromise = judgeCitationFn({
+          context: citationContext,
+          entry,
+          evidence,
+          provider: runContext.settings.provider,
+          language: runContext.settings.evidenceLanguage,
+          signal: runContext.signal,
+          onStatus: message => {
+            if (controller.isActive(runContext)) options.onStatus?.(message, citationContext);
+          },
+        });
+        judgementCache.set(key, judgementPromise);
+      }
+      const judgement = await judgementPromise;
+      return { context: citationContext, entry, evidence, judgement };
+    }, {
+      concurrency: citationAuditConcurrency(runContext.settings.speedMode),
+      signal: runContext.signal,
+      onResult: (result, index) => {
+        if (controller.isActive(runContext)) options.onResult?.(result, index);
+      },
+    });
+  }
+
+  function currentCitationProvider() {
+    if (typeof document === "undefined") return "off";
+    const enabled = document.getElementById("opt-local-gpu-rerank")?.checked;
+    return enabled ? document.getElementById("opt-rerank-provider")?.value || "webgpu" : "off";
   }
 
   function bindFileInput(input, textarea) {
+    let changeId = 0;
     input?.addEventListener("change", async () => {
+      const currentChangeId = ++changeId;
       const file = input.files?.[0];
       if (!file || !textarea) return;
-      textarea.value = await file.text();
+      const value = await file.text();
+      if (currentChangeId === changeId) textarea.value = value;
     });
   }
 
@@ -561,7 +632,8 @@
     if (typeof document === "undefined") return;
     initToolSwitch();
     const root = document.getElementById("citation-audit");
-    if (!root || !window.BibLib) return;
+    const controller = window.BibRunController?.defaultController;
+    if (!root || !window.BibLib?.runBoundedQueue || !controller) return;
 
     const bibInput = root.querySelector("#citation-bib-input");
     const manuscriptInput = root.querySelector("#citation-manuscript-input");
@@ -576,70 +648,64 @@
     bindFileInput(manuscriptFile, manuscriptInput);
 
     runButton?.addEventListener("click", async () => {
-      const bibText = bibInput?.value || "";
-      const manuscriptText = manuscriptInput?.value || "";
-      const entries = window.BibLib.parseBib(bibText);
-      const contexts = extractCitationContexts(manuscriptText);
+      const runContext = controller.startAudit({
+        inputs: {
+          bibText: bibInput?.value || "",
+          manuscriptText: manuscriptInput?.value || "",
+        },
+        settings: {
+          evidenceLanguage: currentEvidenceLanguage(),
+          speedMode: currentSpeedMode(),
+          provider: currentCitationProvider(),
+        },
+      });
+      const entries = window.BibLib.parseBib(runContext.inputs.bibText);
+      const contexts = extractCitationContexts(runContext.inputs.manuscriptText);
       const entriesByKey = mapEntriesByKey(entries);
-      const evidenceCache = new Map();
-      const results = [];
-      if (outputEl) outputEl.hidden = false;
-      if (resultsEl) resultsEl.innerHTML = "";
-      updateSummary(root, results);
+      const results = runContext.results;
+      if (controller.isActive(runContext)) {
+        if (outputEl) outputEl.hidden = false;
+        if (resultsEl) resultsEl.innerHTML = "";
+        updateSummary(root, results);
+      }
 
       if (!entries.length) {
-        statusEl.textContent = "Add a BibTeX file before running citation support.";
+        if (controller.isActive(runContext))
+          statusEl.textContent = "Add a BibTeX file before running citation support.";
         return;
       }
       if (!contexts.length) {
-        statusEl.textContent = "No LaTeX citation commands were found in the manuscript text.";
-        renderResults(resultsEl, []);
-        updateSummary(root, results);
+        if (controller.isActive(runContext)) {
+          statusEl.textContent = "No LaTeX citation commands were found in the manuscript text.";
+          renderResults(resultsEl, []);
+          updateSummary(root, results);
+        }
         return;
       }
 
-      runButton.disabled = true;
       try {
-        const judgementCache = new Map();
-        await runBoundedQueue(contexts, async (context, i) => {
-          const entry = entriesByKey.get(context.key);
-          let evidencePromise = evidenceCache.get(context.key);
-          if (!evidencePromise) {
-            evidencePromise = fetchEvidence(entry);
-            evidenceCache.set(context.key, evidencePromise);
-          }
-          const evidence = await evidencePromise;
-          const key = judgementCacheKey(context, entry, evidence);
-          let judgementPromise = judgementCache.get(key);
-          if (!judgementPromise) {
-            judgementPromise = judgeCitation({
-              context,
-              entry,
-              evidence,
-              provider: "auto",
-              language: currentEvidenceLanguage(),
-              onStatus: (message) => { statusEl.textContent = `${context.key}: ${message}`; },
-            });
-            judgementCache.set(key, judgementPromise);
-          }
-          const judgement = await judgementPromise;
-          return { context, entry, evidence, judgement };
-        }, {
-          concurrency: citationAuditConcurrency(),
-          onResult: (result, i) => {
-            results[i] = result;
+        await runAuditContexts({
+          runContext, contexts, entriesByKey, controller,
+          onStatus: (message, citationContext) => {
+            if (controller.isActive(runContext))
+              statusEl.textContent = `${citationContext.key}: ${message}`;
+          },
+          onResult: (result, index) => {
+            if (!controller.isActive(runContext)) return;
+            results[index] = result;
             const visibleResults = results.filter(Boolean);
             statusEl.textContent = `Checked ${visibleResults.length}/${contexts.length}: ${result.context.key}`;
             updateSummary(root, visibleResults);
             renderResults(resultsEl, visibleResults);
           },
         });
-        statusEl.textContent = `Finished ${contexts.length} citation checks.`;
+        if (controller.isActive(runContext))
+          statusEl.textContent = `Finished ${contexts.length} citation checks.`;
       } catch (err) {
-        statusEl.textContent = `Citation audit stopped: ${err.message}`;
-        console.warn("Citation audit failed:", err);
-      } finally {
-        runButton.disabled = false;
+        if (controller.isActive(runContext)) {
+          statusEl.textContent = `Citation audit stopped: ${err.message}`;
+          console.warn("Citation audit failed:", err);
+        }
       }
     });
   }
@@ -651,11 +717,13 @@
   exports.safeExternalUrl = safeExternalUrl;
   exports.paperUrlForEvidence = paperUrlForEvidence;
   exports.fetchJson = fetchJson;
+  exports.fetchEvidence = fetchEvidence;
   exports.isTransientHttpStatus = isTransientHttpStatus;
   exports.semanticScholarPaperIdForDoi = semanticScholarPaperIdForDoi;
   exports.parseJudgement = parseJudgement;
   exports.applyRiskFlagGuardrails = applyRiskFlagGuardrails;
   exports.judgeCitation = judgeCitation;
+  exports.runAuditContexts = runAuditContexts;
   exports.summarize = summarize;
   exports.initCitationAudit = initCitationAudit;
 

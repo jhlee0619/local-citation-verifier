@@ -38,8 +38,8 @@
 
   function timerApi(options = {}) {
     return {
-      set: options.setTimer || setTimeout,
-      clear: options.clearTimer || clearTimeout,
+      set: options.setTimer || ((fn, ms) => setTimeout(fn, ms)),
+      clear: options.clearTimer || (timer => clearTimeout(timer)),
       now: options.now || Date.now,
     };
   }
@@ -195,11 +195,53 @@
     throw retryExhausted(maxAttempts);
   }
 
+  function jsonp(url, options = {}) {
+    const documentRef = options.document || (typeof document !== "undefined" ? document : null);
+    const root = options.root || (typeof globalThis !== "undefined" ? globalThis : null);
+    if (!documentRef?.createElement || !documentRef?.head || !root)
+      return Promise.reject(new TypeError("JSONP requires a document and global root"));
+    const signal = options.signal;
+    if (signal?.aborted) return Promise.reject(cancelled(signal.reason));
+    const timers = timerApi(options);
+    const callbackName = options.callbackName || `${options.callbackPrefix || "__jsonp"}${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    const target = new URL(url, options.baseUrl || root.location?.origin || "http://localhost");
+    target.searchParams.set(options.callbackParam || "callback", callbackName);
+    const script = documentRef.createElement("script");
+    return new Promise((resolve, reject) => {
+      let timer;
+      let settled = false;
+      const cleanup = () => {
+        if (timer !== undefined) timers.clear(timer);
+        signal?.removeEventListener?.("abort", onAbort);
+        if (root[callbackName]) delete root[callbackName];
+        script.onerror = null;
+        script.remove?.();
+      };
+      const finish = (fn, value) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        fn(value);
+      };
+      const onAbort = () => finish(reject, cancelled(signal.reason));
+      root[callbackName] = value => finish(resolve, value);
+      script.onerror = () => finish(reject, retryExhausted(1, { reason: "transport" }));
+      signal?.addEventListener?.("abort", onAbort, { once: true });
+      timer = timers.set(
+        () => finish(reject, timedOut("attempt", 1)),
+        Math.max(1, Number(options.timeoutMs) || 1),
+      );
+      script.src = target.toString();
+      documentRef.head.appendChild(script);
+    });
+  }
+
   return {
     BUDGETS,
     RequestError,
     sleep,
     request,
+    jsonp,
     retryAfterMs,
     isRetryableStatus,
     classifyResponse,

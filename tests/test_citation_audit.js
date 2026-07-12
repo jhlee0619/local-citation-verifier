@@ -2,6 +2,8 @@
 
 const assert = require("assert");
 const audit = require("../docs/citation-audit.js");
+const lib = require("../docs/lib.js");
+const runs = require("../docs/run-controller.js");
 
 let passed = 0;
 let failed = 0;
@@ -70,23 +72,17 @@ test("builds Korean citation judgement prompt when requested", () => {
 });
 
 test("retries transient evidence fetch failures before returning JSON", async () => {
-  const originalWindow = global.window;
-  const originalFetch = global.fetch;
   let calls = 0;
-  global.window = { location: { origin: "http://localhost" } };
-  global.fetch = async () => {
+  const fetch = async () => {
     calls++;
     if (calls === 1) return { ok: false, status: 503, headers: { get: () => "0" } };
     return { ok: true, json: async () => ({ title: "Recovered" }) };
   };
-  try {
-    const data = await audit.fetchJson("/api/test", {}, { retries: 1, baseDelayMs: 0 });
-    assert.strictEqual(data.title, "Recovered");
-    assert.strictEqual(calls, 2);
-  } finally {
-    global.window = originalWindow;
-    global.fetch = originalFetch;
-  }
+  const data = await audit.fetchJson("/api/test", {}, {
+    retries: 1, baseDelayMs: 0, origin: "http://localhost", fetch,
+  });
+  assert.strictEqual(data.title, "Recovered");
+  assert.strictEqual(calls, 2);
 });
 
 test("classifies only 429 and 5xx gateway statuses as transient", () => {
@@ -168,6 +164,29 @@ test("returns Korean fallback reason for missing abstract evidence", async () =>
   assert.deepStrictEqual(result.riskFlags, ["missing_abstract", "metadata_only"]);
 });
 
+test("caller abort stops evidence retries and is never converted to lookupError", async () => {
+  const controller = new AbortController();
+  let calls = 0;
+  const fetch = async (_url, options) => {
+    calls++;
+    controller.abort("verification replaced");
+    throw options.signal.reason;
+  };
+  const options = {
+    retries: 3, baseDelayMs: 1, signal: controller.signal,
+    origin: "http://localhost", fetch,
+  };
+  await assert.rejects(
+    audit.fetchJson("/api/test", {}, options),
+    error => error.kind === "cancelled" && error.reason === "verification replaced",
+  );
+  await assert.rejects(
+    audit.fetchEvidence({ title: "Paper" }, options),
+    error => error.kind === "cancelled",
+  );
+  assert.strictEqual(calls, 1);
+});
+
 test("does not invoke WebGPU citation judgement before explicit opt-in", async () => {
   const originalWindow = globalThis.window;
   let completeCalls = 0;
@@ -211,6 +230,58 @@ test("summarizes citation verdict counts", () => {
   assert.strictEqual(counts.weak, 2);
   assert.strictEqual(counts.unsupported, 1);
   assert.strictEqual(counts.insufficient_evidence, 0);
+});
+
+test("late audit A cannot publish after audit B starts", async () => {
+  const controller = runs.createRunController();
+  controller.startVerification({ entries: [], settings: {} });
+  let releaseA;
+  const lateEvidence = new Promise(resolve => { releaseA = resolve; });
+  const publications = [];
+  const start = (runContext, key, fetchEvidenceFn) => audit.runAuditContexts({
+    controller, runContext, queue: lib.runBoundedQueue,
+    contexts: [{ key, sentence: key }], entriesByKey: new Map([[key, { title: key }]]),
+    fetchEvidenceFn: (entry, options) => {
+      assert.strictEqual(options.signal, runContext.signal);
+      return fetchEvidenceFn(entry, options);
+    },
+    judgeCitationFn: async ({ onStatus, signal, provider, language }) => {
+      assert.deepStrictEqual([signal, provider, language], [runContext.signal, "vllm", "ko"]);
+      onStatus(`status:${key}`);
+      return { verdict: "supported", riskFlags: [] };
+    },
+    onStatus: message => publications.push(message),
+    onResult: result => publications.push(`result:${result.context.key}`),
+  });
+  const settings = { speedMode: "balanced", provider: "vllm", evidenceLanguage: "ko" };
+  const auditA = controller.startAudit({ inputs: {}, settings });
+  const pendingA = start(auditA, "A", () => lateEvidence);
+  const auditB = controller.startAudit({ inputs: {}, settings });
+  await start(auditB, "B", async () => ({}));
+  releaseA({});
+  await pendingA;
+  assert.deepStrictEqual(publications, ["status:B", "result:B"]);
+});
+
+test("verification replacement aborts its audit without cancelling the new verification", async () => {
+  const controller = runs.createRunController();
+  controller.startVerification({ entries: [], settings: {} });
+  let release;
+  const evidence = new Promise(resolve => { release = resolve; });
+  const auditA = controller.startAudit({ inputs: {}, settings: { speedMode: "balanced" } });
+  const publications = [];
+  const pending = audit.runAuditContexts({
+    controller, runContext: auditA, queue: lib.runBoundedQueue,
+    contexts: [{ key: "A", sentence: "A" }], entriesByKey: new Map(),
+    fetchEvidenceFn: () => evidence,
+    judgeCitationFn: async () => ({ verdict: "supported", riskFlags: [] }),
+    onResult: () => publications.push("A"),
+  });
+  const verificationB = controller.startVerification({ entries: [], settings: {} });
+  release({});
+  await pending;
+  assert.deepStrictEqual(
+    [auditA.signal.aborted, controller.isActive(verificationB), verificationB.signal.aborted, publications], [true, true, false, []]);
 });
 
 Promise.all(testRuns).then(() => {

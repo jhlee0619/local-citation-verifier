@@ -100,10 +100,41 @@ async function testHealthReportsUnavailableWithoutThrowing() {
   }
 }
 
+async function testCallerAbortReachesFetchAndDoesNotPopulateCache() {
+  const originalFetch = globalThis.fetch;
+  const controller = new AbortController();
+  let calls = 0;
+  globalThis.fetch = async (_url, options) => {
+    calls++;
+    assert.strictEqual(options.signal, controller.signal);
+    return new Promise((_resolve, reject) => {
+      options.signal.addEventListener("abort", () => reject(options.signal.reason), { once: true });
+    });
+  };
+  const request = {
+    original: { title: "Abortable" },
+    candidates: [{ title: "A" }, { title: "B" }],
+    parseChoice: lib.parseRerankChoice,
+    preferPublished: true,
+    endpoint: "/api/rerank/vllm-abort",
+    signal: controller.signal,
+  };
+  try {
+    const pending = vllm.rerank(request);
+    controller.abort(new Error("run replaced"));
+    await assert.rejects(pending, /run replaced/);
+    assert.strictEqual(calls, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+    vllm.clearCache?.();
+  }
+}
+
 (async () => {
   await testPostsGemmaPromptToVllmEndpoint();
   await testFallsBackToBestOnlyRerankJson();
   await testCachesIdenticalRerankRequests();
   await testHealthReportsUnavailableWithoutThrowing();
+  await testCallerAbortReachesFetchAndDoesNotPopulateCache();
   console.log("vLLM reranker tests passed");
 })();

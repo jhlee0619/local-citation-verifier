@@ -216,6 +216,33 @@ test("cleans internal timers and caller listeners on every exit path", async () 
   await runCase(() => new Promise(() => {}), controller => setTimeout(() => controller.abort(), 2), "cancelled");
 });
 
+test("JSONP caller abort synchronously removes every late-publication surface", async () => {
+  const controller = new AbortController();
+  const root = { location: { origin: "https://example.test" } };
+  let appended = null;
+  let removed = false;
+  let cleared = 0;
+  const document = {
+    createElement: () => ({ remove: () => { removed = true; } }),
+    head: { appendChild: script => { appended = script; } },
+  };
+  const pending = R.jsonp("https://dblp.test/search?q=x", {
+    root, document, signal: controller.signal,
+    callbackName: "__testDblp", timeoutMs: 12000,
+    setTimer: () => 17,
+    clearTimer: id => { assert.strictEqual(id, 17); cleared++; },
+  });
+  const lateCallback = root.__testDblp;
+  assert.ok(appended.src.includes("callback=__testDblp"));
+  controller.abort("run B started");
+  await assert.rejects(pending, error => error.kind === "cancelled" && error.reason === "run B started");
+  assert.strictEqual(removed, true);
+  assert.strictEqual(cleared, 1);
+  assert.strictEqual(root.__testDblp, undefined);
+  lateCallback({ result: "late A" });
+  appended.onerror?.();
+});
+
 test("loads the browser module before every future request consumer", () => {
   const html = fs.readFileSync(path.join(__dirname, "..", "docs", "index.html"), "utf8");
   const requestIndex = html.indexOf("request.js?v=");

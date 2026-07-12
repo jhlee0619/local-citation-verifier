@@ -34,7 +34,12 @@
     rerankCache.clear();
   }
 
-  async function rerank({ original, candidates, parseChoice, preferPublished, language, onStatus, endpoint }) {
+  function throwIfAborted(signal, error) {
+    if (!signal?.aborted) return;
+    throw signal.reason instanceof Error ? signal.reason : error;
+  }
+
+  async function rerank({ original, candidates, parseChoice, preferPublished, language, onStatus, endpoint, signal }) {
     if (!candidates || candidates.length < 2) return null;
     const root = typeof window !== "undefined" ? window : globalThis;
     if (!root.BibGemmaReranker?.buildPrompt)
@@ -50,12 +55,14 @@
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ prompt, candidate_count: candidates.length }),
+      signal,
     });
 
     if (!response.ok)
       throw new Error(`vLLM rerank failed with HTTP ${response.status}`);
 
     const data = await response.json();
+    throwIfAborted(signal);
     const output = String(data.output || "");
     const decision = root.BibGemmaReranker.parseDecision
       ? root.BibGemmaReranker.parseDecision(output, candidates.length, parseChoice)
@@ -73,9 +80,12 @@
     });
   }
 
-  async function health(endpoint) {
+  async function health(endpoint, options = {}) {
     const url = endpoint || `${DEFAULT_ENDPOINT}/health`;
     const controller = new AbortController();
+    const onCallerAbort = () => controller.abort(options.signal.reason);
+    options.signal?.addEventListener?.("abort", onCallerAbort, { once: true });
+    if (options.signal?.aborted) onCallerAbort();
     const timeout = setTimeout(() => controller.abort(), 900);
     try {
       const response = await fetch(url, { signal: controller.signal });
@@ -85,6 +95,7 @@
       return { ready: false };
     } finally {
       clearTimeout(timeout);
+      options.signal?.removeEventListener?.("abort", onCallerAbort);
     }
   }
 

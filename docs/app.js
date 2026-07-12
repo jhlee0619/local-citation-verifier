@@ -4,6 +4,12 @@
   const B = window.BibLib;
   const A = window.BibAtomicCandidates;
   const D = window.BibDecisionPolicy;
+  const R = window.BibRequest;
+  const runController = window.BibRunController.defaultController;
+
+  function isRunActive(run) {
+    return runController.isActive(run);
+  }
 
   // ─── Configuration ───────────────────────────────────────────────────
   function useMetadataProxy() {
@@ -62,7 +68,9 @@
   }
 
   function tEvidence(key, params = {}) {
-    const lang = getEvidenceLanguage();
+    const lang = activeRun && isRunActive(activeRun)
+      ? activeRun.settings.evidenceLanguage
+      : getEvidenceLanguage();
     let text = (EVIDENCE_TEXT[lang] || EVIDENCE_TEXT.en)[key] || EVIDENCE_TEXT.en[key] || "";
     for (const [name, value] of Object.entries(params))
       text = text.replaceAll(`{${name}}`, String(value ?? ""));
@@ -108,7 +116,12 @@
   }
 
   // ─── Network ─────────────────────────────────────────────────────────
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const sleep = (ms, signal) => R.sleep(ms, { signal });
+
+  function throwIfAborted(signal, error) {
+    if (!signal?.aborted) return;
+    throw signal.reason instanceof Error ? signal.reason : error;
+  }
 
   function isTransientHttpStatus(status) {
     return status === 429 || status === 502 || status === 503 || status === 504;
@@ -129,7 +142,7 @@
     return err;
   }
 
-  async function fetchJSON(url, params, { retries = MAX_RETRIES, is404Ok = false } = {}) {
+  async function fetchJSON(url, params, { retries = MAX_RETRIES, is404Ok = false, signal } = {}) {
     const u = new URL(url, window.location.origin);
     for (const [k, v] of Object.entries(params)) u.searchParams.set(k, v);
 
@@ -138,13 +151,15 @@
     const delay = isSS ? rateState.ssDelay : rateState.crDelay;
     const lastKey = isSS ? "lastSSTime" : "lastCRTime";
     const elapsed = Date.now() - rateState[lastKey];
-    if (elapsed < delay) await sleep(delay - elapsed);
+    if (elapsed < delay) await sleep(delay - elapsed, signal);
+    throwIfAborted(signal);
     rateState[lastKey] = Date.now();
 
     for (let attempt = 0; attempt <= retries; attempt++) {
       try {
-        const resp = await fetch(u.toString());
+        const resp = await fetch(u.toString(), { signal });
         if (resp.ok) {
+          throwIfAborted(signal);
           rateSuccess(source);
           return resp.json();
         }
@@ -154,7 +169,7 @@
           if (attempt < retries) {
             const wait = retryDelayMs(resp, attempt);
             console.warn(`Transient lookup error (${resp.status}) on attempt ${attempt + 1}, retrying in ${wait}ms...`);
-            await sleep(wait);
+            await sleep(wait, signal);
             continue;
           }
           const kind = resp.status === 429 ? "rate_limited" : "upstream";
@@ -162,12 +177,13 @@
         }
         return null;
       } catch (err) {
+        throwIfAborted(signal, err);
         rateBackoff(source);
         if (err?.name === "LookupError") throw err;
         if (attempt < retries) {
           const wait = RETRY_BASE_MS * Math.pow(2, attempt);
           console.warn(`Request failed (${err.message}), retrying in ${wait}ms...`);
-          await sleep(wait);
+          await sleep(wait, signal);
           continue;
         }
         console.warn(`Request failed after ${retries + 1} attempts:`, err.message);
@@ -189,27 +205,31 @@
     return A.createRecord(entry, { recordSource, recordId: stableId, retrieval });
   }
 
-  async function searchSSMatch(title) {
+  function cacheOptions(run) {
+    return run ? { runId: run.id, signal: run.signal } : {};
+  }
+
+  async function searchSSMatch(title, run) {
     const data = await metadataCache.getOrSet(metadataCacheKey("ss-match", title), () =>
-      fetchJSON(SS_MATCH, { query: title, fields: SS_FIELDS }, { is404Ok: true }));
+      fetchJSON(SS_MATCH, { query: title, fields: SS_FIELDS }, { is404Ok: true, signal: run?.signal }), cacheOptions(run));
     if (!data?.data?.[0]) return null;
     const paper = data.data[0];
     return providerRecord(B.ssToStandard(paper), "semantic_scholar_match", paper.paperId, "title_match");
   }
 
-  async function searchSSSearch(title) {
+  async function searchSSSearch(title, run) {
     const data = await metadataCache.getOrSet(metadataCacheKey("ss-search", title), () =>
-      fetchJSON(SS_SEARCH, { query: title, limit: "5", fields: SS_FIELDS }));
+      fetchJSON(SS_SEARCH, { query: title, limit: "5", fields: SS_FIELDS }, { signal: run?.signal }), cacheOptions(run));
     return (data?.data || []).map(paper =>
       providerRecord(B.ssToStandard(paper), "semantic_scholar_search", paper.paperId, "title_search"));
   }
 
-  async function searchCrossref(title) {
+  async function searchCrossref(title, run) {
     const data = await metadataCache.getOrSet(metadataCacheKey("crossref", title), () =>
       fetchJSON(CROSSREF_API, {
         "query.title": title, rows: "5",
         select: "title,author,published-print,published-online,container-title,volume,issue,page,DOI,publisher,URL,type",
-      }));
+      }, { signal: run?.signal }), cacheOptions(run));
     return (data?.message?.items || []).map(item =>
       providerRecord(B.crossrefToStandard(item), "crossref_search", item.DOI || item.URL, "title_search"));
   }
@@ -218,7 +238,7 @@
     return String(doi || "").trim().toLowerCase();
   }
 
-  async function searchCrossrefDoi(doi) {
+  async function searchCrossrefDoi(doi, run) {
     const key = doiCacheKey(doi);
     if (!key) return null;
     const encodedDoi = encodeURIComponent(key);
@@ -226,18 +246,20 @@
       fetchJSON(`${CROSSREF_API}/${encodedDoi}`, {}, {
         retries: Math.min(MAX_RETRIES, 2),
         is404Ok: true,
-      }));
+        signal: run?.signal,
+      }), cacheOptions(run));
     return data?.message
       ? providerRecord(B.crossrefToStandard(data.message), "crossref_doi", data.message.DOI || key, "doi")
       : null;
   }
 
-  async function crossrefDoiRecords(candidates) {
+  async function crossrefDoiRecords(candidates, run) {
     const dois = [...new Set((candidates || []).map(candidate => B.normalizeDoiValue(candidate?.doi)).filter(Boolean))];
     const records = await Promise.all(dois.map(async doi => {
       try {
-        return await searchCrossrefDoi(doi);
+        return await searchCrossrefDoi(doi, run);
       } catch (err) {
+        throwIfAborted(run?.signal, err);
         console.warn("CrossRef DOI lookup failed:", err.message);
         return null;
       }
@@ -266,50 +288,30 @@
     ].map(q => String(q || "").trim()).filter(Boolean)));
   }
 
-  function fetchDblpJsonp(params) {
-    return new Promise((resolve, reject) => {
-      const callbackName = `__dblpCallback${Date.now()}_${Math.random().toString(36).slice(2)}`;
-      const script = document.createElement("script");
-      const u = new URL(DBLP_API);
-      for (const [key, value] of Object.entries(params)) u.searchParams.set(key, value);
-      u.searchParams.set("format", "jsonp");
-      u.searchParams.set("callback", callbackName);
-      let settled = false;
-      const cleanup = () => {
-        settled = true;
-        delete window[callbackName];
-        script.remove();
-      };
-      const timer = window.setTimeout(() => {
-        if (settled) return;
-        cleanup();
-        reject(makeLookupError("upstream", 0, "DBLP JSONP timed out"));
-      }, 12000);
-      window[callbackName] = (data) => {
-        window.clearTimeout(timer);
-        cleanup();
-        resolve(data);
-      };
-      script.onerror = () => {
-        window.clearTimeout(timer);
-        cleanup();
-        reject(makeLookupError("network", 0, "DBLP JSONP request failed"));
-      };
-      script.src = u.toString();
-      document.head.appendChild(script);
+  function fetchDblpJsonp(params, signal) {
+    const u = new URL(DBLP_API);
+    for (const [key, value] of Object.entries(params)) u.searchParams.set(key, value);
+    u.searchParams.set("format", "jsonp");
+    return R.jsonp(u.toString(), {
+      signal,
+      timeoutMs: R.BUDGETS.dblp.totalTimeoutMs,
+      callbackPrefix: "__dblpCallback",
+      root: window,
+      document,
     });
   }
 
-  async function fetchDblpData(params) {
-    if (USE_METADATA_PROXY) return fetchJSON(DBLP_API, { ...params, format: "json" });
-    return fetchDblpJsonp(params);
+  async function fetchDblpData(params, run) {
+    if (USE_METADATA_PROXY)
+      return fetchJSON(DBLP_API, { ...params, format: "json" }, { signal: run?.signal });
+    return fetchDblpJsonp(params, run?.signal);
   }
 
-  async function searchDblp(title, original) {
+  async function searchDblp(title, original, run) {
     let fallback = [];
     for (const query of dblpSearchQueries(title, original)) {
       const data = await metadataCache.getOrSet(metadataCacheKey("dblp", query), () =>
-        fetchDblpData({ q: query, h: "10" }));
+        fetchDblpData({ q: query, h: "10" }, run), cacheOptions(run));
       const hits = data?.result?.hits?.hit || [];
       const candidates = hits.map(hit => {
         const converted = B.dblpToStandard(hit);
@@ -349,12 +351,12 @@
     return score;
   }
 
-  async function searchOpenReview(title, original) {
+  async function searchOpenReview(title, original, run) {
     if (!OPENREVIEW_API) return [];
     const query = openreviewSearchQuery(title, original);
     if (!query.trim()) return [];
     const data = await metadataCache.getOrSet(metadataCacheKey("openreview", query), () =>
-      fetchJSON(OPENREVIEW_API, { term: query, content: "all", source: "all", limit: "10" }));
+      fetchJSON(OPENREVIEW_API, { term: query, content: "all", source: "all", limit: "10" }, { signal: run?.signal }), cacheOptions(run));
     return (data?.notes || [])
       .slice()
       .sort((a, b) => openreviewNoteScore(b, title) - openreviewNoteScore(a, title))
@@ -383,14 +385,14 @@
     }, "local_arxiv", arxivId, "arxiv_id");
   }
 
-  async function fetchLocalArxivCandidate(arxivId) {
+  async function fetchLocalArxivCandidate(arxivId, run) {
     const id = B.normalizeArxivId(arxivId);
     if (!id) return null;
     return arxivCache.getOrSet(`arxiv:${id}`, async () => {
       try {
         const u = new URL(LOCAL_ARXIV_BIBTEX, window.location.origin);
         u.searchParams.set("id", id);
-        const resp = await fetch(u.toString());
+        const resp = await fetch(u.toString(), { signal: run?.signal });
         if (!resp.ok) return null;
         const data = await resp.json();
         if (!data?.bibtex) return null;
@@ -398,18 +400,19 @@
         if (!entry?.title) return null;
         return bibEntryToArxivCandidate(entry, id);
       } catch (err) {
+        throwIfAborted(run?.signal, err);
         console.warn("Local arXiv lookup failed:", err instanceof Error ? err.message : err);
         return null;
       }
-    });
+    }, cacheOptions(run));
   }
 
-  async function addLocalArxivCandidates(candidates, original) {
+  async function addLocalArxivCandidates(candidates, original, run) {
     const ids = new Set([B.extractArxivId(original)]);
     candidates.forEach(candidate => ids.add(B.extractArxivId(candidate)));
     const arxivIds = [...ids].filter(Boolean);
     if (!arxivIds.length) return candidates;
-    const arxivCandidates = await Promise.all(arxivIds.map(fetchLocalArxivCandidate));
+    const arxivCandidates = await Promise.all(arxivIds.map(id => fetchLocalArxivCandidate(id, run)));
     return A.dedupeRecords(arxivCandidates.filter(Boolean).concat(candidates));
   }
 
@@ -422,7 +425,7 @@
     if (!candidates.length && errors.length) throw errors[0];
   }
 
-  async function searchCandidatePool(title, original) {
+  async function searchCandidatePool(title, original, run) {
     const candidates = [];
     const curatedCandidate = B.curatedCandidateForEntry(original);
     if (curatedCandidate) {
@@ -435,11 +438,11 @@
     }
     const errors = [];
     const results = await Promise.allSettled([
-      searchSSMatch(title),
-      searchCrossref(title),
-      searchSSSearch(title),
-      searchDblp(title, original),
-      searchOpenReview(title, original),
+      searchSSMatch(title, run),
+      searchCrossref(title, run),
+      searchSSSearch(title, run),
+      searchDblp(title, original, run),
+      searchOpenReview(title, original, run),
     ]);
 
     const [ssMatchResult, crResult, ssSearchResult, dblpResult, openReviewResult] = results;
@@ -459,8 +462,8 @@
     if (openReviewResult.status === "fulfilled") candidates.push(...openReviewResult.value);
     else rememberLookupError(errors, openReviewResult.reason);
 
-    candidates.push(...await crossrefDoiRecords(candidates));
-    const withArxiv = await addLocalArxivCandidates(A.dedupeRecords(candidates), original);
+    candidates.push(...await crossrefDoiRecords(candidates, run));
+    const withArxiv = await addLocalArxivCandidates(A.dedupeRecords(candidates), original, run);
     throwIfAllLookupsFailed(withArxiv, errors);
     return A.dedupeRecords(withArxiv);
   }
@@ -531,10 +534,11 @@
     return [selection.canonical, ...choices].slice(0, MAX_CANDIDATE_CHOICES);
   }
 
-  async function lookupPaperWithRerank(title, lookupEntry, runSnapshot, allowLlm = true, originalSnapshot = lookupEntry) {
-    const candidates = await searchCandidatePool(title, lookupEntry);
+  async function lookupPaperWithRerank(title, lookupEntry, run, allowLlm = true, originalSnapshot = lookupEntry) {
+    const candidates = await searchCandidatePool(title, lookupEntry, run);
+    if (!isRunActive(run)) return null;
     const original = originalSnapshot;
-    const preferPublished = runSnapshot.preferPublished;
+    const preferPublished = run.settings.preferPublished;
     const selection = A.selectCanonical(A.createOriginal(original), candidates, { preferPublished });
     const candidateChoices = includeCanonicalChoice(B.topCandidates(selection.candidates, original, {
       preferPublished,
@@ -544,10 +548,10 @@
     if (!ranked.best && selection.status !== "auto_apply") return null;
 
     const heuristic = buildRerankedCandidate(selection, ranked.best, candidateChoices, null);
-    const provider = getRerankProvider();
+    const provider = run.settings.rerankProvider;
     const shouldUseLlm = B.shouldCallLlmRerank(ranked, candidateChoices, original, {
       preferPublished,
-      speedMode: getSpeedMode(),
+      speedMode: run.settings.speedMode,
     });
 
     if (allowLlm && candidateChoices.length > 1 && provider !== "off" && shouldUseLlm) {
@@ -561,11 +565,14 @@
             candidates: candidateChoices,
             parseChoice: B.parseRerankChoice,
             preferPublished,
-            language: getEvidenceLanguage(),
-            onStatus: setGemmaRerankStatus,
+            language: run.settings.evidenceLanguage,
+            signal: run.signal,
+            onStatus: message => runController.ifActive(run, () => setGemmaRerankStatus(message)),
           });
+          if (!isRunActive(run)) return null;
           return buildRerankedCandidate(selection, ranked.best, candidateChoices, aiChoice);
         } catch (err) {
+          if (!isRunActive(run)) return null;
           console.warn(provider + " rerank failed; using heuristic candidate:", err.message);
           setGemmaRerankStatus((provider === "vllm" ? "vLLM" : "Gemma") + " unavailable · using heuristic rerank");
           return null;
@@ -576,12 +583,12 @@
     return heuristic;
   }
 
-  async function lookupPaper(title, lookupEntry, runSnapshot, originalSnapshot) {
+  async function lookupPaper(title, lookupEntry, run, originalSnapshot) {
     return lookupPaperWithRerank(
       title,
       lookupEntry,
-      runSnapshot,
-      getRerankProvider() !== "off",
+      run,
+      run.settings.rerankProvider !== "off",
       originalSnapshot
     );
   }
@@ -608,6 +615,7 @@
   let results = [];
   let currentInputValid = false;
   let currentRunSnapshot = null;
+  let activeRun = null;
   let decisionStore = D.createStore();
   let decisions = decisionStore.decisions;
   let fieldEdits = decisionStore.fieldEdits;
@@ -649,6 +657,7 @@
   const barProgressFill = $(".bar-progress-fill");
   const barProgressText = $(".bar-progress-text");
   const btnDownload = $("#btn-download");
+  const btnCancelVerification = $("#btn-cancel-verification");
   btnDownload.disabled = true;
   const mainColumns = $("#main-columns");
   const colPreview = $("#col-preview");
@@ -718,9 +727,13 @@
     if (fileInput.files[0]) handleFile(fileInput.files[0]);
   });
 
+  let inputIntentId = 0;
+
   async function handleFile(file) {
     if (!file.name.endsWith(".bib")) { alert("Please upload a .bib file."); return; }
+    const intentId = ++inputIntentId;
     const content = await file.text();
+    if (intentId !== inputIntentId) return;
     startVerificationFromContent(content, "Reading file...");
   }
 
@@ -729,16 +742,16 @@
   const btnVerifyPaste = $("#btn-verify-paste");
 
   btnVerifyPaste.addEventListener("click", () => {
+    inputIntentId++;
     const content = bibPaste.value;
     if (!content.trim()) { alert("Please paste your BibTeX content first."); return; }
     startVerificationFromContent(content, "Parsing pasted content...");
   });
 
   function startVerificationFromContent(content, statusMsg) {
+    runController.cancelVerification("superseded by new input");
     currentInputValid = false;
-    currentRunSnapshot = Object.freeze({
-      preferPublished: optPreferPublished?.checked !== false,
-    });
+    currentRunSnapshot = null;
     onboardingResumeAfterCurrentRun =
       pendingOnboardingResumeClick ||
       document.body.dataset.onboardingStage === "verify" ||
@@ -759,6 +772,7 @@
     if (searchInputEl) searchInputEl.value = "";
     document.querySelector(".entry-search")?.classList.remove("has-query");
     entryList.innerHTML = "";
+    $$(".summary-count").forEach(element => { element.textContent = "0"; });
     document.getElementById("entry-empty")?.classList.remove("visible");
     rateState.ssDelay = 500;
     rateState.crDelay = 100;
@@ -775,6 +789,7 @@
     btnDownload.classList.add("hidden");
     btnDownload.classList.remove("fade-in");
     btnDownload.disabled = true;
+    btnCancelVerification?.classList.remove("hidden");
     floatingBar.classList.add("visible");
 
     mainColumns.classList.add("two-col");
@@ -790,6 +805,7 @@
       parsedEntries = [];
       alert(`BibTeX parse error at offset ${offset}: ${reason}. Nothing was verified or exported.`);
       floatingBar.classList.remove("visible");
+      btnCancelVerification?.classList.add("hidden");
       onboardingResumeAfterCurrentRun = false;
       return;
     }
@@ -798,23 +814,41 @@
     if (!parsedEntries.length) {
       alert("No BibTeX entries found. Make sure the content contains valid @type{key, ...} entries.");
       floatingBar.classList.remove("visible");
+      btnCancelVerification?.classList.add("hidden");
       onboardingResumeAfterCurrentRun = false;
       return;
     }
 
-    currentRunSnapshot = Object.freeze({
-      ...currentRunSnapshot,
-      originals: Object.freeze(parsedEntries.map(entry => Object.freeze({ ...entry }))),
+    const run = runController.startVerification({
+      entries: parsedEntries,
+      settings: {
+        ...getSettings(),
+        speedMode: getSpeedMode(),
+        rerankProvider: getRerankProvider(),
+        evidenceLanguage: getEvidenceLanguage(),
+        concurrency: verificationConcurrency(),
+      },
     });
+    decisionStore = D.createStore();
+    run.decisions = decisionStore.decisions;
+    run.fieldEdits = decisionStore.fieldEdits;
+    run.duplicateOfByIndex = new Array(run.entries.length);
+    activeRun = run;
+    parsedEntries = run.entries;
+    results = run.results;
+    decisions = run.decisions;
+    fieldEdits = run.fieldEdits;
+    currentRunSnapshot = Object.freeze({ ...run.settings, originals: run.originals, runId: run.id });
 
     currentInputValid = true;
     resultsSection.style.display = "block";
     barProgressText.textContent = `Verifying 0 / ${parsedEntries.length} entries...`;
-    runVerification();
+    runVerification(run);
   }
 
-  async function verifyEntryAt(index) {
-    const entry = parsedEntries[index];
+  async function verifyEntryAt(run, index) {
+    if (!isRunActive(run)) return null;
+    const entry = run.entries[index];
     const title = entry.title || "";
     const cleanTitle = B.stripLatex(title);
     const lookupEntry = B.normalizeEntryForLookup(entry);
@@ -822,28 +856,31 @@
     let lookupError = null;
     const isTourFakeEntry = /QZX999/i.test(cleanTitle);
     if (isTourFakeEntry) {
-      await sleep(500);
+      await runController.settleOwned(run, sleep(500, run.signal));
+      if (!isRunActive(run)) return null;
     } else {
       try {
         found = await lookupPaper(
           cleanTitle,
           lookupEntry,
-          currentRunSnapshot,
-          currentRunSnapshot.originals[index]
+          run,
+          run.originals[index]
         );
       }
       catch (err) {
+        if (!isRunActive(run)) return null;
         lookupError = err;
         console.warn("Lookup failed:", err);
       }
     }
 
+    if (!isRunActive(run)) return null;
     if (lookupError) {
-      const r = buildResult(entry, index, "lookup_failed", 0, [], {}, null);
+      const r = buildResult(run, entry, index, "lookup_failed", 0, [], {}, null);
       r.lookup_error = lookupError.message || String(lookupError);
       return r;
     }
-    if (!found) return buildResult(entry, index, "not_found", 0, [], {}, null);
+    if (!found) return buildResult(run, entry, index, "not_found", 0, [], {}, null);
 
     const cmp = B.compareEntry(entry, found);
     let finalStatus = B.shouldKeepDeterministicStatus(entry, found, cmp)
@@ -858,31 +895,32 @@
       finalStatus = "verified";
       fieldDiffs = [];
     }
-    return buildResult(entry, index, finalStatus, cmp.title_score, fieldDiffs, cmp.suggested, found);
+    return buildResult(run, entry, index, finalStatus, cmp.title_score, fieldDiffs, cmp.suggested, found);
   }
 
-  async function runVerification() {
-    const total = parsedEntries.length;
+  async function runVerification(run) {
+    const total = run.entries.length;
     const seenDuplicateKeys = new Map();
     let completed = 0;
-    results = new Array(total);
 
-    parsedEntries.forEach((entry, i) => {
+    run.entries.forEach((entry, i) => {
       const entryId = entry.ID || `entry_${i}`;
       const duplicateOf = B.findDuplicateEntryId(entry, seenDuplicateKeys);
-      if (duplicateOf) entry._duplicateOf = duplicateOf;
+      if (duplicateOf) run.duplicateOfByIndex[i] = duplicateOf;
       B.registerDuplicateKeys(entryId, entry, seenDuplicateKeys);
     });
 
-    await B.runBoundedQueue(parsedEntries, async (entry, i) => {
+    await B.runBoundedQueue(run.entries, async (entry, i) => {
       const title = entry.title || "";
-      if (!title.trim()) return buildResult(entry, i, "not_found", 0, [], {}, null);
-      return verifyEntryAt(i);
+      if (!title.trim()) return buildResult(run, entry, i, "not_found", 0, [], {}, null);
+      return verifyEntryAt(run, i);
     }, {
-      concurrency: verificationConcurrency(),
+      concurrency: run.settings.concurrency,
+      signal: run.signal,
       onResult: (r, i) => {
+        if (!isRunActive(run) || !r) return;
         completed++;
-        results[i] = r;
+        run.results[i] = r;
         const pct = Math.round((completed / total) * 100);
         barProgressFill.style.width = pct + "%";
         barProgressText.textContent = `Verified ${completed} / ${total}: ${(r.title || "").slice(0, 50)}…`;
@@ -893,11 +931,11 @@
         if (r.pending_rerank) {
           const pending = r.pending_rerank;
           pending.then(patchedFound => {
-            if (!patchedFound || results[i]?.pending_rerank !== pending) return;
-            const currentDecision = decisions[i];
-            const preserveDecision = currentDecision && !D.canApplySuggestion(currentDecision, fieldEdits[i] || {});
+            if (!isRunActive(run) || !patchedFound || run.results[i]?.pending_rerank !== pending) return;
+            const currentDecision = run.decisions[i];
+            const preserveDecision = currentDecision && !D.canApplySuggestion(currentDecision, run.fieldEdits[i] || {});
 
-            const entry = parsedEntries[i];
+            const entry = run.entries[i];
             const cmp = B.compareEntry(entry, patchedFound);
             let finalStatus = B.shouldKeepDeterministicStatus(entry, patchedFound, cmp)
               ? cmp.status
@@ -911,9 +949,9 @@
               finalStatus = "verified";
               fieldDiffs = [];
             }
-            const patched = buildResult(entry, i, finalStatus, cmp.title_score, fieldDiffs, cmp.suggested, patchedFound);
+            const patched = buildResult(run, entry, i, finalStatus, cmp.title_score, fieldDiffs, cmp.suggested, patchedFound);
             if (preserveDecision) {
-              decisions[i] = currentDecision;
+              run.decisions[i] = currentDecision;
               const preservedCandidate = D.resolveCandidate(patched.candidate_choices, currentDecision);
               patched.selected_choice = currentDecision.action === "exclude"
                 ? "exclude"
@@ -923,7 +961,7 @@
                 : -1;
             }
             patched.pending_rerank = null;
-            results[i] = patched;
+            run.results[i] = patched;
             renderEntryCard(patched);
             updateSummary();
             updateAuthorPills();
@@ -933,27 +971,55 @@
       },
     });
 
-    if (!currentInputValid) return;
+    if (!isRunActive(run)) return;
+    run.completed = true;
     barProgressFill.classList.add("done");
     barProgressText.textContent = `Done — ${total} entries verified`;
+    btnCancelVerification?.classList.add("hidden");
     const resumeOnboardingAfterResults = onboardingResumeAfterCurrentRun;
     onboardingResumeAfterCurrentRun = false;
     setTimeout(() => {
-      if (!currentInputValid) return;
+      if (!isRunActive(run)) return;
       barProgress.classList.add("fade-out");
       setTimeout(() => {
-        if (!currentInputValid) return;
+        if (!isRunActive(run)) return;
         barProgress.classList.remove("active", "fade-out");
         btnDownload.disabled = false;
         btnDownload.classList.remove("hidden");
         btnDownload.classList.add("fade-in");
         if (resumeOnboardingAfterResults)
-          setTimeout(() => openOnboardingPostVerifyTour(), 450);
+          setTimeout(() => {
+            if (!isRunActive(run)) return;
+            openOnboardingPostVerifyTour();
+          }, 450);
       }, 350);
     }, 800);
   }
 
-  function buildResult(entry, index, status, titleScore, fieldDiffs, suggested, found) {
+  btnCancelVerification?.addEventListener("click", () => {
+    const cancelled = runController.cancelVerification("cancelled by user");
+    if (!cancelled || cancelled !== activeRun) return;
+    cancelled.results.fill(undefined);
+    Object.keys(cancelled.decisions).forEach(key => { delete cancelled.decisions[key]; });
+    Object.keys(cancelled.fieldEdits).forEach(key => { delete cancelled.fieldEdits[key]; });
+    currentInputValid = false;
+    onboardingResumeAfterCurrentRun = false;
+    entryList.innerHTML = "";
+    $$(".summary-count").forEach(element => { element.textContent = "0"; });
+    currentPreviewBib = "";
+    currentPreviewState = null;
+    previewPlaceholder.style.display = "flex";
+    previewCode.style.display = "none";
+    previewCode.textContent = "";
+    previewPanelEl.querySelector(".preview-mixed-source-warning")?.remove();
+    barProgressFill.classList.remove("done");
+    barProgressText.textContent = "Cancelled — no pending lookup result was published";
+    btnCancelVerification.classList.add("hidden");
+    btnDownload.disabled = true;
+    btnDownload.classList.add("hidden");
+  });
+
+  function buildResult(run, entry, index, status, titleScore, fieldDiffs, suggested, found) {
     const candidateChoices = found ? (found._candidateChoices || []) : [];
     const proposedCandidate = candidateChoices[0] && found ? {
       ...candidateChoices[0],
@@ -966,7 +1032,7 @@
     } : null;
     const outcome = D.initialOutcome(status, proposedCandidate, 0);
     status = outcome.status;
-    decisions[index] = outcome.decision;
+    run.decisions[index] = outcome.decision;
     const defaultCandidateIndex = outcome.decision.action === "candidate" ? 0 : -1;
 
     return {
@@ -987,10 +1053,10 @@
       selected_choice: defaultCandidateIndex >= 0 ? "candidate" : "original",
       paper_url: found ? B.paperUrlForEntry(found) : B.paperUrlForEntry(entry),
       pending_rerank: found ? (found._pendingRerank || null) : null,
-      duplicate_of: entry._duplicateOf || null,
+      duplicate_of: run.duplicateOfByIndex[index] || null,
       lookup_error: null,
       canonical_reason: found ? (found._canonicalReason || "") : "",
-      run_snapshot: currentRunSnapshot,
+      run_snapshot: run.settings,
     };
   }
 
@@ -1082,7 +1148,7 @@
         : "";
       const score = Math.round(B.candidateScore(candidate, parsedEntries[r.index] || {}, {
         preferPublished: r.run_snapshot?.preferPublished === true,
-      }));
+      }), cacheOptions(run));
       const provenance = provenanceHTML(parsedEntries[r.index] || {}, candidate);
       return `<div class="candidate-option ${selected === key ? "active" : ""}">
         <button class="candidate-option-btn" type="button" data-entry="${r.index}" data-choice-action="candidate" data-candidate-index="${index}">
@@ -2082,7 +2148,9 @@
 
   // ─── Live preview ────────────────────────────────────────────────
   function buildPreviewState() {
-    const s = getSettings();
+    const s = activeRun && isRunActive(activeRun)
+      ? activeRun.settings
+      : getSettings();
     const count = results.length;
     let projected = parsedEntries.slice(0, count).map((entry, i) => {
       const r = results[i];
@@ -2208,7 +2276,7 @@
   }
 
   function updatePreview() {
-    if (!currentInputValid || !parsedEntries.length) return;
+    if (!currentInputValid || !parsedEntries.length || !isRunActive(activeRun)) return;
     currentPreviewState = buildPreviewState();
     currentPreviewBib = currentPreviewState.bib;
     results.forEach((result, index) => {
@@ -2241,14 +2309,17 @@
 
   const btnCopy = $("#btn-copy-preview");
   btnCopy.addEventListener("click", () => {
-    if (!currentInputValid || !currentPreviewBib) return;
+    const run = activeRun;
+    if (!currentInputValid || !currentPreviewBib || !isRunActive(run)) return;
     currentPreviewState = buildPreviewState();
     currentPreviewBib = currentPreviewState.bib;
     navigator.clipboard.writeText(currentPreviewState.bib).then(() => {
+      if (!isRunActive(run)) return;
       btnCopy.classList.add("copied");
       const origHTML = btnCopy.innerHTML;
       btnCopy.innerHTML = origHTML.replace("Copy", "Copied!");
       setTimeout(() => {
+        if (!isRunActive(run)) return;
         btnCopy.classList.remove("copied");
         btnCopy.innerHTML = origHTML;
       }, 1500);
@@ -2439,7 +2510,8 @@
 
   // ─── Download ─────────────────────────────────────────────────────
   btnDownload.addEventListener("click", () => {
-    if (!currentInputValid || btnDownload.disabled || !results.length) return;
+    const run = activeRun;
+    if (!currentInputValid || btnDownload.disabled || !results.length || !isRunActive(run)) return;
     currentPreviewState = buildPreviewState();
     const bibContent = currentPreviewState.bib;
     currentPreviewBib = bibContent;
@@ -2743,11 +2815,13 @@
     const params = new URLSearchParams(window.location.search);
     const fixture = params.get("fixture");
     if (!fixture) return;
+    const intentId = ++inputIntentId;
     const autoVerify = params.get("autoverify") === "1";
     try {
       const resp = await fetch(`fixtures/${encodeURIComponent(fixture)}.bib`);
       if (!resp.ok) throw new Error(`fixture not found (${resp.status})`);
       const content = await resp.text();
+      if (intentId !== inputIntentId) return;
       switchToPasteTab();
       bibPaste.value = content;
       if (autoVerify) startVerificationFromContent(content, "Loading fixture...");

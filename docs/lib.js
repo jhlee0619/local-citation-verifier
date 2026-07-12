@@ -1674,6 +1674,14 @@
     return margin < marginThreshold;
   }
 
+  function cacheAbortError(reason) {
+    const error = new Error(typeof reason === "string" ? reason : "cache lookup cancelled");
+    error.name = "AbortError";
+    error.kind = "cancelled";
+    error.reason = reason;
+    return error;
+  }
+
   function createTtlCache(options = {}) {
     const ttlMs = Math.max(0, Number(options.ttlMs || 0));
     const now = typeof options.now === "function" ? options.now : () => Date.now();
@@ -1693,18 +1701,42 @@
         entries.set(key, { value, expiresAt: now() + ttlMs });
         return value;
       },
-      async getOrSet(key, producer) {
+      async getOrSet(key, producer, pendingOptions = {}) {
         const cached = this.get(key);
         if (cached !== undefined) return cached;
-        const pendingKey = `${key}::pending`;
-        const pending = entries.get(pendingKey)?.value;
-        if (pending) return pending;
-        const promise = Promise.resolve().then(producer).then(value => {
+        const runId = pendingOptions.runId ?? "shared";
+        const pendingKey = `${key}::pending:${runId}`;
+        const pendingEntry = entries.get(pendingKey);
+        if (pendingEntry && pendingEntry.expiresAt > now()) return pendingEntry.value;
+        if (pendingEntry) entries.delete(pendingKey);
+        const signal = pendingOptions.signal;
+        let removeAbortListener = () => {};
+        const produced = Promise.resolve().then(() => {
+          if (signal?.aborted) throw cacheAbortError(signal.reason);
+          return producer();
+        });
+        const abortable = signal ? new Promise((resolve, reject) => {
+          let settled = false;
+          const finish = (callback, value) => {
+            if (settled) return;
+            settled = true;
+            signal.removeEventListener("abort", onAbort);
+            callback(value);
+          };
+          const onAbort = () => finish(reject, cacheAbortError(signal.reason));
+          removeAbortListener = () => signal.removeEventListener("abort", onAbort);
+          signal.addEventListener("abort", onAbort, { once: true });
+          if (signal.aborted) onAbort();
+          produced.then(value => finish(resolve, value), error => finish(reject, error));
+        }) : produced;
+        const promise = abortable.then(value => {
           entries.delete(pendingKey);
-          this.set(key, value);
+          removeAbortListener();
+          if (!signal?.aborted) this.set(key, value);
           return value;
         }, err => {
           entries.delete(pendingKey);
+          removeAbortListener();
           throw err;
         });
         entries.set(pendingKey, { value: promise, expiresAt: now() + ttlMs });
@@ -1721,9 +1753,10 @@
     const results = new Array(list.length);
     let nextIndex = 0;
     async function runWorker() {
-      while (nextIndex < list.length) {
+      while (!options.signal?.aborted && nextIndex < list.length) {
         const index = nextIndex++;
         const result = await worker(list[index], index);
+        if (options.signal?.aborted) continue;
         results[index] = result;
         if (typeof options.onResult === "function") options.onResult(result, index);
       }
