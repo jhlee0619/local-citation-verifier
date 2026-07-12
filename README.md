@@ -50,12 +50,20 @@ vllm serve google/gemma-4-E2B-it --host 127.0.0.1 --port 8000 --max-model-len 81
 HOST=127.0.0.1 PORT=8088 VLLM_BASE_URL=http://127.0.0.1:8000 python3 server/vllm_proxy_server.py
 ```
 
-Use `HOST=127.0.0.1` when you only need local access. The proxy defaults to `0.0.0.0`, which exposes the static app and rerank endpoint on your LAN without authentication.
+The proxy defaults to `127.0.0.1` and requires no exposure flag for `127.0.0.1`, `::1`, or `localhost`. Keep the upstream vLLM service bound to `127.0.0.1`.
+
+Prefer an SSH tunnel for access from another machine. A non-loopback `HOST` is rejected before bind unless `ALLOW_REMOTE=1` is set exactly:
+
+```bash
+ALLOW_REMOTE=1 HOST=0.0.0.0 PORT=8088 VLLM_BASE_URL=http://127.0.0.1:8000 python3 server/vllm_proxy_server.py
+```
+
+This flag provides neither authentication nor TLS. Direct LAN/public exposure makes the static app, metadata proxy, and rerank API reachable. If a tunnel is unsuitable, put the proxy behind an authenticated HTTPS reverse proxy and a firewall allowlist; do not expose the upstream vLLM port.
 
 Then open one of these addresses and choose `vLLM server` in the rerank engine menu:
 
 - Same machine as the proxy: `http://127.0.0.1:8088/`
-- LAN access: `http://<server-host>:8088/`
+- Explicitly allowed LAN access: `http://<server-host>:8088/`
 - SSH tunnel from your laptop: `ssh -L 18088:127.0.0.1:8088 user@server.example.com`, then open `http://127.0.0.1:18088/`
 
 When the proxy health check succeeds, the app selects vLLM automatically. In this mode, rerank inference runs on the server GPU, while the UI still runs in your browser.

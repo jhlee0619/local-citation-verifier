@@ -6,8 +6,11 @@ import sys
 import unittest
 from http.client import RemoteDisconnected
 from pathlib import Path
+from typing import NoReturn
+from urllib.request import Request
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "server"))
 
 from vllm_proxy_server import (  # noqa: E402
@@ -30,6 +33,7 @@ from vllm_proxy_server import (  # noqa: E402
     validate_proxy_path,
 )
 import vllm_proxy_server  # noqa: E402
+from server import proxy_core  # noqa: E402
 
 
 class VllmProxyServerTests(unittest.TestCase):
@@ -117,18 +121,18 @@ class VllmProxyServerTests(unittest.TestCase):
         self.assertIn("arXiv identifier", raised.exception.message)
 
     def test_fetch_upstream_wraps_closed_connections(self) -> None:
-        original_urlopen = vllm_proxy_server.urlopen
+        original_urlopen = proxy_core.urlopen
 
-        def closed_connection(_request: object, timeout: float) -> object:
+        def closed_connection(_request: Request, timeout: float) -> NoReturn:
             raise RemoteDisconnected("closed")
 
-        vllm_proxy_server.urlopen = closed_connection
+        proxy_core.urlopen = closed_connection
         try:
             with self.assertRaises(UpstreamError) as raised:
                 fetch_upstream("https://dblp.org/search/publ/api", timeout_seconds=1.0)
             self.assertIn("closed", raised.exception.message)
         finally:
-            vllm_proxy_server.urlopen = original_urlopen
+            proxy_core.urlopen = original_urlopen
 
     def test_validate_proxy_path_accepts_dblp_publication_search(self) -> None:
         path = validate_proxy_path("search/publ/api", DBLP_ALLOWED_PREFIXES)
