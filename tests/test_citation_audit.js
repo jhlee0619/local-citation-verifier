@@ -168,6 +168,32 @@ test("returns Korean fallback reason for missing abstract evidence", async () =>
   assert.deepStrictEqual(result.riskFlags, ["missing_abstract", "metadata_only"]);
 });
 
+test("does not invoke WebGPU citation judgement before explicit opt-in", async () => {
+  const originalWindow = globalThis.window;
+  let completeCalls = 0;
+  globalThis.window = {
+    BibVllmReranker: { health: async () => ({ ready: false }) },
+    BibGemmaReranker: {
+      isEnabled: () => false,
+      completePrompt: async () => { completeCalls++; return ""; },
+    },
+  };
+  try {
+    const result = await audit.judgeCitation({
+      context: { key: "x", sentence: "A claim \\cite{x}." },
+      entry: { title: "Known Paper", author: "Doe, Jane", year: "2024" },
+      evidence: { title: "Known Paper", abstract: "Evidence text." },
+      provider: "auto",
+      language: "en",
+    });
+    assert.strictEqual(result.verdict, "insufficient_evidence");
+    assert.deepStrictEqual(result.riskFlags, ["local_ai_disabled"]);
+    assert.strictEqual(completeCalls, 0);
+  } finally {
+    globalThis.window = originalWindow;
+  }
+});
+
 test("falls back to insufficient evidence for invalid verdict", () => {
   const result = audit.parseJudgement('{"verdict":"certain","confidence":9}');
   assert.strictEqual(result.verdict, "insufficient_evidence");

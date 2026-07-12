@@ -64,6 +64,10 @@
         en: "No abstract or TLDR was available for this reference.",
         ko: "이 참고문헌에는 판단에 필요한 초록이나 TLDR이 없습니다.",
       },
+      localAiDisabled: {
+        en: "Local AI judgement is disabled; enable an inference engine to evaluate support.",
+        ko: "로컬 AI 판단이 꺼져 있습니다. 인용 근거를 평가하려면 추론 엔진을 활성화하세요.",
+      },
     };
     return messages[key]?.[lang] || messages[key]?.en || "";
   }
@@ -402,7 +406,22 @@
 
     const prompt = buildPrompt({ context, entry, evidence, language: evidenceLanguage });
     let selectedProvider = provider || "auto";
-    if (selectedProvider === "auto") selectedProvider = await detectVllmReady() ? "vllm" : "webgpu";
+    if (selectedProvider === "auto") {
+      const vllmReady = await detectVllmReady();
+      selectedProvider = vllmReady
+        ? "vllm"
+        : window.BibGemmaReranker?.isEnabled?.() ? "webgpu" : "off";
+    }
+    if (selectedProvider === "off") {
+      return {
+        verdict: "insufficient_evidence",
+        confidence: 0,
+        reason: citationFallbackText("localAiDisabled", evidenceLanguage),
+        evidenceQuote: evidence?.title || entry.title || "",
+        riskFlags: ["local_ai_disabled"],
+        raw: "",
+      };
+    }
     const output = selectedProvider === "vllm"
       ? await completeWithVllm(prompt, onStatus)
       : await window.BibGemmaReranker.completePrompt(prompt, { maxNewTokens: 220, onStatus });

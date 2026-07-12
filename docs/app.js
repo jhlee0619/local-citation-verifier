@@ -2359,7 +2359,14 @@
     const provider = getRerankProvider();
     if (provider === "off") return "Off · uses heuristic matching";
     if (provider === "vllm") return "On · vLLM server rerank";
-    return "On · WebGPU Gemma by default";
+    if (window.BibGemmaReranker?.isQuarantined?.())
+      return "WebGPU quarantined until page reload · uses heuristic matching";
+    return "On · experimental WebGPU Gemma; pinned assets download from Hugging Face";
+  }
+
+  function syncWebGpuConsent() {
+    const enabled = !!optLocalGpuRerank?.checked && optRerankProvider?.value === "webgpu";
+    window.BibGemmaReranker?.setEnabled?.(enabled);
   }
 
   function setGemmaRerankStatus(message) {
@@ -2371,9 +2378,9 @@
     if (!window.BibVllmReranker || !optRerankProvider || !optLocalGpuRerank) return;
     const health = await window.BibVllmReranker.health();
     if (!health?.ready) return;
-    optLocalGpuRerank.checked = true;
     optRerankProvider.value = "vllm";
-    setGemmaRerankStatus(`On · vLLM server ready${health.model ? ` (${health.model})` : ""}`);
+    syncWebGpuConsent();
+    setGemmaRerankStatus(`Available · vLLM server ready${health.model ? ` (${health.model})` : ""}; enable AI rerank to use it`);
   }
 
   settingsToggle.addEventListener("click", (e) => {
@@ -2397,10 +2404,11 @@
   [optRemoveNotFound, optPreferPublished, optLatexEscape].forEach(el =>
     el?.addEventListener("change", updatePreview));
   optLocalGpuRerank?.addEventListener("change", () => {
+    syncWebGpuConsent();
     setGemmaRerankStatus(describeRerankProvider());
   });
   optRerankProvider?.addEventListener("change", () => {
-    if (optLocalGpuRerank) optLocalGpuRerank.checked = true;
+    syncWebGpuConsent();
     setGemmaRerankStatus(describeRerankProvider());
   });
   optEvidenceLanguage?.addEventListener("change", () => {
@@ -2409,6 +2417,7 @@
   optSpeedMode?.addEventListener("change", () => {
     localStorage.setItem(SPEED_MODE_STORAGE, getSpeedMode());
   });
+  syncWebGpuConsent();
   detectVllmServer();
   optMaxAuthors.addEventListener("change", () => {
     updateAuthorPills();
