@@ -166,25 +166,25 @@
 
   const defaultEngine = createGemmaEngine();
 
-  async function rerank({ original, candidates, parseChoice, preferPublished, language, onStatus, engine = defaultEngine }) {
+  async function rerank({ original, candidates, parseChoice, preferPublished, language, onStatus, signal, engine = defaultEngine }) {
     if (!candidates || candidates.length < 2) return null;
     onStatus?.("Loading Gemma WebGPU reranker...");
     onStatus?.("Reranking candidates on local GPU...");
     const prompt = buildPrompt(original, candidates, { preferPublished, language });
     const output = await engine.complete(
       [{ role: "user", content: prompt }],
-      { maxNewTokens: 160, onStatus },
+      { maxNewTokens: 160, onStatus, signal },
     );
     const decision = parseDecision(output, candidates.length, parseChoice);
     if (!decision) return null;
     return { ...decision, candidate: candidates[decision.index], output };
   }
 
-  async function completePrompt(prompt, { maxNewTokens = 220, onStatus, engine = defaultEngine } = {}) {
+  async function completePrompt(prompt, { maxNewTokens = 220, onStatus, signal, engine = defaultEngine } = {}) {
     if (!prompt || typeof prompt !== "string") throw new Error("Prompt is required.");
     onStatus?.("Loading Gemma WebGPU model...");
     onStatus?.("Running local WebGPU judgement...");
-    return engine.complete([{ role: "user", content: prompt }], { maxNewTokens, onStatus });
+    return engine.complete([{ role: "user", content: prompt }], { maxNewTokens, onStatus, signal });
   }
 
   exports.LOADER_REVISION = LOADER_REVISION;

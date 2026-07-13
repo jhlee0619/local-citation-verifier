@@ -212,6 +212,57 @@ test("quarantines an inference error and never retries it", async () => {
   assert.strictEqual(completeCalls, 1);
 });
 
+test("caller cancellation reaches WebGPU completion without quarantining a loaded engine", async () => {
+  const controller = new AbortController();
+  let calls = 0;
+  let observedSignal = null;
+  const fixture = createFixture({
+    enabled: true,
+    model: {
+      complete: async (_messages, options) => {
+        calls++;
+        if (calls > 1) return "recovered";
+        observedSignal = options.signal;
+        return new Promise((_resolve, reject) => {
+          options.signal.addEventListener("abort", () => reject(options.signal.reason), { once: true });
+        });
+      },
+    },
+  });
+  const pending = fixture.engine.complete([], { signal: controller.signal });
+  await waitFor(() => observedSignal !== null);
+  controller.abort("verification replaced");
+  await assert.rejects(
+    pending,
+    error => error.kind === "cancelled" && error.reason === "verification replaced",
+  );
+  assert.strictEqual(observedSignal.aborted, true);
+  assert.strictEqual(fixture.engine.state().quarantined, false);
+  assert.strictEqual(await fixture.engine.complete([], {}), "recovered");
+  assert.deepStrictEqual(fixture.counts(), { imports: 1, loads: 1 });
+});
+
+test("cancelled WebGPU load remains a single page attempt", async () => {
+  const controller = new AbortController();
+  let loadSignal = null;
+  const fixture = createFixture({
+    enabled: true,
+    load: async received => {
+      loadSignal = received.signal;
+      return new Promise((_resolve, reject) => {
+        received.signal.addEventListener("abort", () => reject(received.signal.reason), { once: true });
+      });
+    },
+  });
+  const pending = fixture.engine.complete([], { signal: controller.signal });
+  await waitFor(() => loadSignal !== null);
+  controller.abort("verification replaced during load");
+  await assert.rejects(pending, error => error.kind === "cancelled");
+  assert.strictEqual(fixture.engine.state().quarantined, true);
+  await assert.rejects(fixture.engine.complete([], {}), error => error.kind === "quarantined");
+  assert.deepStrictEqual(fixture.counts(), { imports: 1, loads: 1 });
+});
+
 test("preserves validated rerank parsing on the successful path", async () => {
   const output = JSON.stringify({
     best: 2,
@@ -229,6 +280,27 @@ test("preserves validated rerank parsing on the successful path", async () => {
   });
   assert.strictEqual(result.candidate, candidates[1]);
   assert.strictEqual(result.status, "needs_review");
+});
+
+test("forwards the caller signal through Gemma rerank and citation completion", async () => {
+  const controller = new AbortController();
+  const received = [];
+  const engine = {
+    complete: async (_messages, options) => {
+      received.push(options);
+      return received.length === 1 ? '{"best":1}' : "citation output";
+    },
+  };
+  await gemma.rerank({
+    original: { title: "A" },
+    candidates: [{ title: "A" }, { title: "B" }],
+    parseChoice: lib.parseRerankChoice,
+    signal: controller.signal,
+    engine,
+  });
+  await gemma.completePrompt("prompt", { signal: controller.signal, engine });
+  assert.strictEqual(received[0].signal, controller.signal);
+  assert.strictEqual(received[1].signal, controller.signal);
 });
 
 test("declares opt-in and quarantine contracts in the browser surface", () => {

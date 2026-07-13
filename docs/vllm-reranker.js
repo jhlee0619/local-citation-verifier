@@ -4,6 +4,7 @@
   const DEFAULT_ENDPOINT = "/api/rerank/vllm";
   const RERANK_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
   const rerankCache = new Map();
+  const NODE_REQUEST = typeof module !== "undefined" && module.exports ? require("./request.js") : null;
 
   function cacheKey(endpoint, prompt, candidates) {
     const ids = (candidates || []).map(candidate => [
@@ -39,7 +40,10 @@
     throw signal.reason instanceof Error ? signal.reason : error;
   }
 
-  async function rerank({ original, candidates, parseChoice, preferPublished, language, onStatus, endpoint, signal }) {
+  async function rerank({
+    original, candidates, parseChoice, preferPublished, language, onStatus, endpoint, signal,
+    requestApi: requestOverride, fetch: fetchOverride,
+  }) {
     if (!candidates || candidates.length < 2) return null;
     const root = typeof window !== "undefined" ? window : globalThis;
     if (!root.BibGemmaReranker?.buildPrompt)
@@ -51,17 +55,18 @@
     const cached = getCachedDecision(key);
     if (cached) return cached;
     onStatus?.("Reranking candidates with local vLLM server...");
-    const response = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt, candidate_count: candidates.length }),
-      signal,
-    });
-
-    if (!response.ok)
-      throw new Error(`vLLM rerank failed with HTTP ${response.status}`);
-
-    const data = await response.json();
+    const requestApi = requestOverride || root.BibRequest || NODE_REQUEST;
+    const fetchFn = fetchOverride || fetch;
+    const outcome = await requestApi.request(async ({ signal: attemptSignal }) => {
+      const response = await fetchFn(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt, candidate_count: candidates.length }),
+        signal: attemptSignal,
+      });
+      return response.ok ? response.json() : response;
+    }, { ...requestApi.BUDGETS.vllm, signal });
+    const data = outcome.value || {};
     throwIfAborted(signal);
     const output = String(data.output || "");
     const decision = root.BibGemmaReranker.parseDecision
@@ -82,20 +87,18 @@
 
   async function health(endpoint, options = {}) {
     const url = endpoint || `${DEFAULT_ENDPOINT}/health`;
-    const controller = new AbortController();
-    const onCallerAbort = () => controller.abort(options.signal.reason);
-    options.signal?.addEventListener?.("abort", onCallerAbort, { once: true });
-    if (options.signal?.aborted) onCallerAbort();
-    const timeout = setTimeout(() => controller.abort(), 900);
+    const root = typeof window !== "undefined" ? window : globalThis;
+    const requestApi = options.requestApi || root.BibRequest || NODE_REQUEST;
+    const fetchFn = options.fetch || fetch;
     try {
-      const response = await fetch(url, { signal: controller.signal });
-      if (!response.ok) return { ready: false };
-      return response.json();
-    } catch (_) {
+      const outcome = await requestApi.request(async ({ signal }) => {
+        const response = await fetchFn(url, { signal });
+        return response.ok ? response.json() : response;
+      }, { ...requestApi.BUDGETS.health, signal: options.signal });
+      return outcome.value || { ready: false };
+    } catch (error) {
+      if (error?.kind === "cancelled") throw error;
       return { ready: false };
-    } finally {
-      clearTimeout(timeout);
-      options.signal?.removeEventListener?.("abort", onCallerAbort);
     }
   }
 

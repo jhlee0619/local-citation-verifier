@@ -243,6 +243,36 @@ test("JSONP caller abort synchronously removes every late-publication surface", 
   appended.onerror?.();
 });
 
+test("JSONP deadline removes its callback and ignores a late response", async () => {
+  const root = { location: { origin: "https://example.test" } };
+  let appended = null;
+  let timerCallback = null;
+  let removed = false;
+  let cleared = 0;
+  const document = {
+    createElement: () => ({ remove: () => { removed = true; } }),
+    head: { appendChild: script => { appended = script; } },
+  };
+  const pending = R.jsonp("https://dblp.test/search?q=late", {
+    root, document, callbackName: "__lateDblp", timeoutMs: 25,
+    setTimer: callback => { timerCallback = callback; return 23; },
+    clearTimer: id => { assert.strictEqual(id, 23); cleared++; },
+  });
+  const lateCallback = root.__lateDblp;
+  assert.strictEqual(typeof lateCallback, "function");
+  assert.ok(appended.src.includes("callback=__lateDblp"));
+  timerCallback();
+  await assert.rejects(
+    pending,
+    error => error.kind === "deadline_timeout" && error.scope === "attempt",
+  );
+  assert.strictEqual(removed, true);
+  assert.strictEqual(cleared, 1);
+  assert.strictEqual(root.__lateDblp, undefined);
+  lateCallback({ result: "too late" });
+  appended.onerror?.();
+});
+
 test("loads the browser module before every future request consumer", () => {
   const html = fs.readFileSync(path.join(__dirname, "..", "docs", "index.html"), "utf8");
   const requestIndex = html.indexOf("request.js?v=");

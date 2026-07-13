@@ -7,8 +7,8 @@
   const BANG_SENTINEL = "__CITATION_BANG__";
   const QUERY_SENTINEL = "__CITATION_QUERY__";
   const EVIDENCE_LANGUAGE_STORAGE = "bv-evidence-language";
-  const MAX_RETRIES = 3;
-  const RETRY_BASE_MS = 500;
+  const NODE_REQUEST = typeof module !== "undefined" && module.exports ? require("./request.js") : null;
+  const NODE_PROVIDER = typeof module !== "undefined" && module.exports ? require("./provider-runtime.js") : null;
 
   function useMetadataProxy() {
     if (typeof window === "undefined" || !window.location) return false;
@@ -67,6 +67,10 @@
       localAiDisabled: {
         en: "Local AI judgement is disabled; enable an inference engine to evaluate support.",
         ko: "로컬 AI 판단이 꺼져 있습니다. 인용 근거를 평가하려면 추론 엔진을 활성화하세요.",
+      },
+      localAiUnavailable: {
+        en: "Local AI judgement was unavailable; no support verdict was inferred.",
+        ko: "로컬 AI 판단을 사용할 수 없어 인용 근거 판정을 추론하지 않았습니다.",
       },
     };
     return messages[key]?.[lang] || messages[key]?.en || "";
@@ -207,85 +211,57 @@
     return error;
   }
 
-  function sleep(ms, options = {}) {
-    const requestApi = typeof window !== "undefined" ? window.BibRequest : null;
-    if (requestApi?.sleep) return requestApi.sleep(ms, options);
-    const error = abortReason(options.signal);
-    if (error) return Promise.reject(error);
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(finish, Math.max(0, Number(ms) || 0));
-      function cleanup() { options.signal?.removeEventListener?.("abort", onAbort); }
-      function finish() { cleanup(); resolve(); }
-      function onAbort() { clearTimeout(timer); cleanup(); reject(abortReason(options.signal)); }
-      options.signal?.addEventListener?.("abort", onAbort, { once: true });
-    });
-  }
-
   function isTransientHttpStatus(status) {
     return status === 429 || status === 502 || status === 503 || status === 504;
   }
 
-  function retryDelayMs(response, attempt, baseDelayMs) {
-    const retryAfter = response?.headers?.get?.("Retry-After");
-    const seconds = Number(retryAfter);
-    if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
-    return baseDelayMs * Math.pow(2, attempt);
-  }
-
   async function fetchJson(url, params, options = {}) {
-    const retries = Number.isInteger(options.retries) ? options.retries : MAX_RETRIES;
-    const baseDelayMs = Number.isFinite(options.baseDelayMs) ? options.baseDelayMs : RETRY_BASE_MS;
-    const origin = options.origin || (typeof window !== "undefined" ? window.location.origin : "http://localhost");
-    const fetchFn = options.fetch || fetch;
-    const u = new URL(url, origin);
-    for (const [key, value] of Object.entries(params || {})) {
-      if (value !== undefined && value !== null && value !== "") u.searchParams.set(key, value);
-    }
-    for (let attempt = 0; attempt <= retries; attempt++) {
-      try {
-        const priorAbort = abortReason(options.signal);
-        if (priorAbort) throw priorAbort;
-        const response = await fetchFn(u.toString(), { signal: options.signal });
-        if (response.ok) return response.json();
-        if (!isTransientHttpStatus(response.status)) return null;
-        if (attempt < retries) {
-          const wait = retryDelayMs(response, attempt, baseDelayMs);
-          if (wait > 0) await sleep(wait, { signal: options.signal });
-          continue;
-        }
-        throw new Error(`transient evidence lookup error ${response.status}`);
-      } catch (err) {
-        const cancelled = abortReason(options.signal, err);
-        if (cancelled || err?.kind === "cancelled" || err?.name === "AbortError") throw cancelled || err;
-        if (attempt < retries) {
-          const wait = baseDelayMs * Math.pow(2, attempt);
-          if (wait > 0) await sleep(wait, { signal: options.signal });
-          continue;
-        }
-        throw err;
-      }
-    }
-    return null;
+    const requestApi = options.requestApi || (typeof window !== "undefined" ? window.BibRequest : NODE_REQUEST);
+    const provider = options.providerRuntime || (typeof window !== "undefined" ? window.BibProviderRuntime : NODE_PROVIDER);
+    return provider.requestJson(url, params, {
+      requestApi,
+      budget: options.budget || requestApi.BUDGETS.evidence,
+      signal: options.signal,
+      origin: options.origin || (typeof window !== "undefined" ? window.location?.origin : "") || "http://localhost",
+      fetch: options.fetch,
+    });
   }
 
   async function fetchEvidence(entry, options = {}) {
     if (!entry) return normalizeEvidence(null, null);
     const doi = entry.doi || entry.DOI;
+    const requestApi = options.requestApi || (typeof window !== "undefined" ? window.BibRequest : NODE_REQUEST);
+    const provider = options.providerRuntime || (typeof window !== "undefined" ? window.BibProviderRuntime : NODE_PROVIDER);
+    const baseBudget = options.budget || requestApi.BUDGETS.evidence;
+    const now = options.now || Date.now;
+    const deadlineAt = provider.budgetDeadline(baseBudget, now());
+    const nextOptions = () => {
+      const budget = provider.remainingBudget(baseBudget, deadlineAt, now());
+      if (!budget)
+        throw new requestApi.RequestError("deadline_timeout", "citation evidence deadline exceeded", { scope: "total", attempts: 1 });
+      return { ...options, requestApi, providerRuntime: provider, budget };
+    };
     try {
       if (doi) {
         const paperId = semanticScholarPaperIdForDoi(doi);
-        const paper = await fetchJson(`${SS_PAPER}${paperId}`, { fields: SS_FIELDS }, options);
+        const paper = await fetchJson(`${SS_PAPER}${paperId}`, { fields: SS_FIELDS }, nextOptions());
         if (paper) return normalizeEvidence(paper, entry);
       }
       if (entry.title) {
-        const matched = await fetchJson(SS_MATCH, { query: entry.title, fields: SS_FIELDS }, options);
+        const matched = await fetchJson(SS_MATCH, { query: entry.title, fields: SS_FIELDS }, nextOptions());
         if (matched?.data?.[0]) return normalizeEvidence(matched.data[0], entry);
       }
       return normalizeEvidence(null, entry);
     } catch (err) {
       const cancelled = abortReason(options.signal, err);
       if (cancelled || err?.kind === "cancelled" || err?.name === "AbortError") throw cancelled || err;
-      return { ...normalizeEvidence(null, entry), lookupError: err.message || String(err) };
+      const warning = provider?.sourceWarnings?.([{
+        source: "citation_evidence",
+        role: "enrichment",
+        state: "failure",
+        error: err,
+      }])?.[0] || "Citation evidence temporarily unavailable.";
+      return { ...normalizeEvidence(null, entry), lookupError: warning };
     }
   }
 
@@ -350,11 +326,13 @@
   function parseJudgement(text) {
     const parsed = parseJsonObject(text);
     const allowed = new Set(["supported", "weak", "unsupported", "insufficient_evidence"]);
-    const verdict = allowed.has(String(parsed?.verdict || "")) ? parsed.verdict : "insufficient_evidence";
+    const validVerdict = allowed.has(String(parsed?.verdict || ""));
+    const verdict = validVerdict ? parsed.verdict : "insufficient_evidence";
     const confidence = Number(parsed?.confidence);
     const riskFlags = Array.isArray(parsed?.risk_flags)
       ? parsed.risk_flags.map((flag) => String(flag || "").toLowerCase()).filter(Boolean)
       : [];
+    if (!validVerdict && !riskFlags.includes("invalid_model_output")) riskFlags.push("invalid_model_output");
     return applyRiskFlagGuardrails({
       verdict,
       confidence: Number.isFinite(confidence) ? Math.max(0, Math.min(1, confidence)) : null,
@@ -384,16 +362,20 @@
     return { ...judgement, verdict };
   }
 
-  async function completeWithVllm(prompt, onStatus, signal) {
+  async function completeWithVllm(prompt, onStatus, signal, requestOverride, fetchOverride) {
     onStatus?.("Judging citation support with local vLLM server...");
-    const response = await fetch("/api/rerank/vllm", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt, candidate_count: 1, max_tokens: 220 }),
-      signal,
-    });
-    if (!response.ok) throw new Error(`vLLM judgement failed with HTTP ${response.status}`);
-    const data = await response.json();
+    const requestApi = requestOverride || (typeof window !== "undefined" ? window.BibRequest : NODE_REQUEST);
+    const fetchFn = fetchOverride || fetch;
+    const outcome = await requestApi.request(async ({ signal: attemptSignal }) => {
+      const response = await fetchFn("/api/rerank/vllm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt, candidate_count: 1, max_tokens: 220 }),
+        signal: attemptSignal,
+      });
+      return response.ok ? response.json() : response;
+    }, { ...requestApi.BUDGETS.vllm, signal });
+    const data = outcome.value || {};
     return String(data.output || "");
   }
 
@@ -403,7 +385,7 @@
     return !!health?.ready;
   }
 
-  async function judgeCitation({ context, entry, evidence, provider, language, onStatus, signal }) {
+  async function judgeCitation({ context, entry, evidence, provider, language, onStatus, signal, requestApi, fetch: fetchFn }) {
     const evidenceLanguage = normalizeEvidenceLanguage(language);
     if (!entry) {
       return {
@@ -458,10 +440,23 @@
         raw: "",
       };
     }
-    const output = selectedProvider === "vllm"
-      ? await completeWithVllm(prompt, onStatus, signal)
-      : await window.BibGemmaReranker.completePrompt(prompt, { maxNewTokens: 220, onStatus, signal });
-    return parseJudgement(output);
+    try {
+      const output = selectedProvider === "vllm"
+        ? await completeWithVllm(prompt, onStatus, signal, requestApi, fetchFn)
+        : await window.BibGemmaReranker.completePrompt(prompt, { maxNewTokens: 220, onStatus, signal });
+      return parseJudgement(output);
+    } catch (error) {
+      const cancelled = abortReason(signal, error);
+      if (cancelled || error?.kind === "cancelled" || error?.name === "AbortError") throw cancelled || error;
+      return {
+        verdict: "insufficient_evidence",
+        confidence: 0,
+        reason: citationFallbackText("localAiUnavailable", evidenceLanguage),
+        evidenceQuote: evidence?.title || entry.title || "",
+        riskFlags: ["local_ai_unavailable"],
+        raw: "",
+      };
+    }
   }
 
   function verdictLabel(verdict) {
@@ -579,7 +574,14 @@
       const entry = entriesByKey.get(citationContext.key);
       let evidencePromise = evidenceCache.get(citationContext.key);
       if (!evidencePromise) {
-        evidencePromise = fetchEvidenceFn(entry, { signal: runContext.signal });
+        evidencePromise = Promise.resolve(fetchEvidenceFn(entry, { signal: runContext.signal }))
+          .then(evidence => {
+            if (evidence?.lookupError) evidenceCache.delete(citationContext.key);
+            return evidence;
+          }, error => {
+            evidenceCache.delete(citationContext.key);
+            throw error;
+          });
         evidenceCache.set(citationContext.key, evidencePromise);
       }
       const evidence = await evidencePromise;
@@ -587,7 +589,7 @@
       const key = judgementCacheKey(citationContext, entry, evidence);
       let judgementPromise = judgementCache.get(key);
       if (!judgementPromise) {
-        judgementPromise = judgeCitationFn({
+        judgementPromise = Promise.resolve(judgeCitationFn({
           context: citationContext,
           entry,
           evidence,
@@ -597,6 +599,14 @@
           onStatus: message => {
             if (controller.isActive(runContext)) options.onStatus?.(message, citationContext);
           },
+        })).then(judgement => {
+          const flags = judgement?.riskFlags || [];
+          if (["invalid_model_output", "local_ai_unavailable", "lookup_failed"].some(flag => flags.includes(flag)))
+            judgementCache.delete(key);
+          return judgement;
+        }, error => {
+          judgementCache.delete(key);
+          throw error;
         });
         judgementCache.set(key, judgementPromise);
       }

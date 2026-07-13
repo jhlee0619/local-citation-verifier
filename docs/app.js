@@ -5,6 +5,7 @@
   const A = window.BibAtomicCandidates;
   const D = window.BibDecisionPolicy;
   const R = window.BibRequest;
+  const P = window.BibProviderRuntime;
   const runController = window.BibRunController.defaultController;
 
   function isRunActive(run) {
@@ -31,8 +32,6 @@
   const OPENREVIEW_API = USE_METADATA_PROXY ? "/api/openreview/notes/search" : "";
   const SS_FIELDS = "title,authors,year,venue,publicationVenue,externalIds";
   const LOCAL_ARXIV_BIBTEX = "/api/arxiv/bibtex";
-  const MAX_RETRIES = 4;
-  const RETRY_BASE_MS = 1500;
   const MAX_CANDIDATE_CHOICES = 3;
   const EVIDENCE_LANGUAGE_STORAGE = "bv-evidence-language";
   const SPEED_MODE_STORAGE = "bv-speed-mode";
@@ -123,74 +122,27 @@
     throw signal.reason instanceof Error ? signal.reason : error;
   }
 
-  function isTransientHttpStatus(status) {
-    return status === 429 || status === 502 || status === 503 || status === 504;
-  }
-
-  function retryDelayMs(resp, attempt) {
-    const retryAfter = resp?.headers?.get?.("Retry-After");
-    const seconds = Number(retryAfter);
-    if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
-    return RETRY_BASE_MS * Math.pow(2, attempt);
-  }
-
-  function makeLookupError(kind, status, message) {
-    const err = new Error(message);
-    err.name = "LookupError";
-    err.kind = kind;
-    err.status = status;
-    return err;
-  }
-
-  async function fetchJSON(url, params, { retries = MAX_RETRIES, is404Ok = false, signal } = {}) {
-    const u = new URL(url, window.location.origin);
-    for (const [k, v] of Object.entries(params)) u.searchParams.set(k, v);
-
+  async function fetchJSON(url, params, { signal, budget = R.BUDGETS.search } = {}) {
     const isSS = url.includes("semanticscholar.org") || url.startsWith("/api/semanticscholar");
     const source = isSS ? "ss" : "cr";
-    const delay = isSS ? rateState.ssDelay : rateState.crDelay;
-    const lastKey = isSS ? "lastSSTime" : "lastCRTime";
-    const elapsed = Date.now() - rateState[lastKey];
-    if (elapsed < delay) await sleep(delay - elapsed, signal);
-    throwIfAborted(signal);
-    rateState[lastKey] = Date.now();
-
-    for (let attempt = 0; attempt <= retries; attempt++) {
-      try {
-        const resp = await fetch(u.toString(), { signal });
-        if (resp.ok) {
-          throwIfAborted(signal);
-          rateSuccess(source);
-          return resp.json();
-        }
-        if (resp.status === 404 && is404Ok) return null;
-        if (isTransientHttpStatus(resp.status)) {
-          rateBackoff(source);
-          if (attempt < retries) {
-            const wait = retryDelayMs(resp, attempt);
-            console.warn(`Transient lookup error (${resp.status}) on attempt ${attempt + 1}, retrying in ${wait}ms...`);
-            await sleep(wait, signal);
-            continue;
-          }
-          const kind = resp.status === 429 ? "rate_limited" : "upstream";
-          throw makeLookupError(kind, resp.status, `transient lookup error ${resp.status}`);
-        }
-        return null;
-      } catch (err) {
-        throwIfAborted(signal, err);
-        rateBackoff(source);
-        if (err?.name === "LookupError") throw err;
-        if (attempt < retries) {
-          const wait = RETRY_BASE_MS * Math.pow(2, attempt);
-          console.warn(`Request failed (${err.message}), retrying in ${wait}ms...`);
-          await sleep(wait, signal);
-          continue;
-        }
-        console.warn(`Request failed after ${retries + 1} attempts:`, err.message);
-        throw makeLookupError("network", 0, err.message || "network lookup failed");
-      }
-    }
-    return null;
+    return P.requestJson(url, params, {
+      requestApi: R,
+      budget,
+      signal,
+      origin: window.location.origin,
+      beforeAttempt: async ({ signal: attemptSignal }) => {
+        const delay = isSS ? rateState.ssDelay : rateState.crDelay;
+        const lastKey = isSS ? "lastSSTime" : "lastCRTime";
+        const elapsed = Date.now() - rateState[lastKey];
+        if (elapsed < delay) await sleep(delay - elapsed, attemptSignal);
+        throwIfAborted(attemptSignal);
+        rateState[lastKey] = Date.now();
+      },
+      onResponse: response => {
+        if (response.ok) rateSuccess(source);
+        else if (R.isRetryableStatus(response.status)) rateBackoff(source);
+      },
+    });
   }
 
   // ─── API searches ────────────────────────────────────────────────────
@@ -211,7 +163,7 @@
 
   async function searchSSMatch(title, run) {
     const data = await metadataCache.getOrSet(metadataCacheKey("ss-match", title), () =>
-      fetchJSON(SS_MATCH, { query: title, fields: SS_FIELDS }, { is404Ok: true, signal: run?.signal }), cacheOptions(run));
+      fetchJSON(SS_MATCH, { query: title, fields: SS_FIELDS }, { signal: run?.signal }), cacheOptions(run));
     if (!data?.data?.[0]) return null;
     const paper = data.data[0];
     return providerRecord(B.ssToStandard(paper), "semantic_scholar_match", paper.paperId, "title_match");
@@ -244,8 +196,7 @@
     const encodedDoi = encodeURIComponent(key);
     const data = await metadataCache.getOrSet(`crossref-doi:${key}`, () =>
       fetchJSON(`${CROSSREF_API}/${encodedDoi}`, {}, {
-        retries: Math.min(MAX_RETRIES, 2),
-        is404Ok: true,
+        budget: R.BUDGETS.metadata,
         signal: run?.signal,
       }), cacheOptions(run));
     return data?.message
@@ -253,18 +204,18 @@
       : null;
   }
 
-  async function crossrefDoiRecords(candidates, run) {
-    const dois = [...new Set((candidates || []).map(candidate => B.normalizeDoiValue(candidate?.doi)).filter(Boolean))];
-    const records = await Promise.all(dois.map(async doi => {
-      try {
-        return await searchCrossrefDoi(doi, run);
-      } catch (err) {
-        throwIfAborted(run?.signal, err);
-        console.warn("CrossRef DOI lookup failed:", err.message);
-        return null;
-      }
-    }));
-    return records.filter(Boolean);
+  async function crossrefDoiRecords(candidates, original, run) {
+    const dois = [...new Set([
+      B.normalizeDoiValue(original?.doi),
+      ...(candidates || []).map(candidate => B.normalizeDoiValue(candidate?.doi)),
+    ].filter(Boolean))];
+    const settled = await Promise.allSettled(dois.map(doi => searchCrossrefDoi(doi, run)));
+    return {
+      candidates: settled.filter(result => result.status === "fulfilled" && result.value).map(result => result.value),
+      outcomes: settled.map(result => result.status === "fulfilled"
+        ? { source: "crossref_doi", role: "enrichment", state: "success" }
+        : { source: "crossref_doi", role: "enrichment", state: "failure", error: result.reason }),
+    };
   }
 
   function firstAuthorSearchToken(original) {
@@ -288,30 +239,37 @@
     ].map(q => String(q || "").trim()).filter(Boolean)));
   }
 
-  function fetchDblpJsonp(params, signal) {
+  function fetchDblpJsonp(params, signal, budget = R.BUDGETS.dblp) {
     const u = new URL(DBLP_API);
     for (const [key, value] of Object.entries(params)) u.searchParams.set(key, value);
     u.searchParams.set("format", "jsonp");
     return R.jsonp(u.toString(), {
       signal,
-      timeoutMs: R.BUDGETS.dblp.totalTimeoutMs,
+      timeoutMs: budget.totalTimeoutMs,
       callbackPrefix: "__dblpCallback",
       root: window,
       document,
     });
   }
 
-  async function fetchDblpData(params, run) {
+  async function fetchDblpData(params, run, budget = R.BUDGETS.dblp) {
     if (USE_METADATA_PROXY)
-      return fetchJSON(DBLP_API, { ...params, format: "json" }, { signal: run?.signal });
-    return fetchDblpJsonp(params, run?.signal);
+      return fetchJSON(DBLP_API, { ...params, format: "json" }, {
+        signal: run?.signal,
+        budget,
+      });
+    return fetchDblpJsonp(params, run?.signal, budget);
   }
 
   async function searchDblp(title, original, run) {
     let fallback = [];
+    const deadlineAt = P.budgetDeadline(R.BUDGETS.dblp);
     for (const query of dblpSearchQueries(title, original)) {
+      const budget = P.remainingBudget(R.BUDGETS.dblp, deadlineAt);
+      if (!budget)
+        throw new R.RequestError("deadline_timeout", "DBLP search deadline exceeded", { scope: "total", attempts: 1 });
       const data = await metadataCache.getOrSet(metadataCacheKey("dblp", query), () =>
-        fetchDblpData({ q: query, h: "10" }, run), cacheOptions(run));
+        fetchDblpData({ q: query, h: "10" }, run, budget), cacheOptions(run));
       const hits = data?.result?.hits?.hit || [];
       const candidates = hits.map(hit => {
         const converted = B.dblpToStandard(hit);
@@ -389,21 +347,16 @@
     const id = B.normalizeArxivId(arxivId);
     if (!id) return null;
     return arxivCache.getOrSet(`arxiv:${id}`, async () => {
-      try {
-        const u = new URL(LOCAL_ARXIV_BIBTEX, window.location.origin);
-        u.searchParams.set("id", id);
-        const resp = await fetch(u.toString(), { signal: run?.signal });
-        if (!resp.ok) return null;
-        const data = await resp.json();
-        if (!data?.bibtex) return null;
-        const entry = B.parseBib(data.bibtex)[0];
-        if (!entry?.title) return null;
-        return bibEntryToArxivCandidate(entry, id);
-      } catch (err) {
-        throwIfAborted(run?.signal, err);
-        console.warn("Local arXiv lookup failed:", err instanceof Error ? err.message : err);
-        return null;
-      }
+      const data = await P.requestJson(LOCAL_ARXIV_BIBTEX, { id }, {
+        requestApi: R,
+        budget: R.BUDGETS.arxiv,
+        signal: run?.signal,
+        origin: window.location.origin,
+      });
+      if (!data?.bibtex) return null;
+      const entry = B.parseBib(data.bibtex)[0];
+      if (!entry?.title) return null;
+      return bibEntryToArxivCandidate(entry, id);
     }, cacheOptions(run));
   }
 
@@ -411,64 +364,77 @@
     const ids = new Set([B.extractArxivId(original)]);
     candidates.forEach(candidate => ids.add(B.extractArxivId(candidate)));
     const arxivIds = [...ids].filter(Boolean);
-    if (!arxivIds.length) return candidates;
-    const arxivCandidates = await Promise.all(arxivIds.map(id => fetchLocalArxivCandidate(id, run)));
-    return A.dedupeRecords(arxivCandidates.filter(Boolean).concat(candidates));
+    if (!arxivIds.length) return { candidates, outcomes: [] };
+    const settled = await Promise.allSettled(arxivIds.map(id => fetchLocalArxivCandidate(id, run)));
+    return {
+      candidates: A.dedupeRecords(settled
+        .filter(result => result.status === "fulfilled" && result.value)
+        .map(result => result.value)
+        .concat(candidates)),
+      outcomes: settled.map(result => result.status === "fulfilled"
+        ? { source: "local_arxiv", role: "enrichment", state: "success" }
+        : { source: "local_arxiv", role: "enrichment", state: "failure", error: result.reason }),
+    };
   }
 
-  function rememberLookupError(errors, err) {
-    if (!err) return;
-    errors.push(err);
-  }
-
-  function throwIfAllLookupsFailed(candidates, errors) {
-    if (!candidates.length && errors.length) throw errors[0];
+  function relevantProviderCandidates(original, candidates) {
+    return P.relevantCandidates(original, candidates, {
+      directLinkKinds: A.directLinkKinds,
+      titleSimilarity: B.titleSimilarity,
+      minTitleSim: B.MIN_TITLE_SIM,
+    });
   }
 
   async function searchCandidatePool(title, original, run) {
-    const candidates = [];
+    const rawCandidates = [];
     const curatedCandidate = B.curatedCandidateForEntry(original);
     if (curatedCandidate) {
-      candidates.push(providerRecord(
+      rawCandidates.push(providerRecord(
         curatedCandidate,
         "local_curation",
         `${original.ID || "entry"}:${B.normalizeTitle(original.title || "")}`,
         "curation_rule"
       ));
     }
-    const errors = [];
-    const results = await Promise.allSettled([
-      searchSSMatch(title, run),
-      searchCrossref(title, run),
-      searchSSSearch(title, run),
-      searchDblp(title, original, run),
-      searchOpenReview(title, original, run),
-    ]);
+    const searches = [
+      { source: "semantic_scholar_match", run: () => searchSSMatch(title, run) },
+      { source: "crossref_search", run: () => searchCrossref(title, run) },
+      { source: "semantic_scholar_search", run: () => searchSSSearch(title, run) },
+      { source: "dblp", run: () => searchDblp(title, original, run) },
+    ];
+    if (OPENREVIEW_API)
+      searches.push({ source: "openreview", run: () => searchOpenReview(title, original, run) });
+    const settled = await Promise.allSettled(searches.map(search => search.run()));
+    const outcomes = settled.map((result, index) => result.status === "fulfilled"
+      ? { source: searches[index].source, role: "primary", state: "success" }
+      : { source: searches[index].source, role: "primary", state: "failure", error: result.reason });
+    settled.forEach(result => {
+      if (result.status !== "fulfilled" || !result.value) return;
+      if (Array.isArray(result.value)) rawCandidates.push(...result.value);
+      else rawCandidates.push(result.value);
+    });
 
-    const [ssMatchResult, crResult, ssSearchResult, dblpResult, openReviewResult] = results;
-    if (ssMatchResult.status === "fulfilled" && ssMatchResult.value)
-      candidates.push(ssMatchResult.value);
-    else if (ssMatchResult.status === "rejected") rememberLookupError(errors, ssMatchResult.reason);
+    let candidates = A.dedupeRecords(relevantProviderCandidates(original, rawCandidates));
+    const doiEnrichment = await crossrefDoiRecords(candidates, original, run);
+    outcomes.push(...doiEnrichment.outcomes);
+    candidates = A.dedupeRecords(candidates.concat(relevantProviderCandidates(original, doiEnrichment.candidates)));
+    const arxivEnrichment = await addLocalArxivCandidates(candidates, original, run);
+    outcomes.push(...arxivEnrichment.outcomes);
+    candidates = A.dedupeRecords(relevantProviderCandidates(original, arxivEnrichment.candidates));
 
-    if (crResult.status === "fulfilled") candidates.push(...crResult.value);
-    else rememberLookupError(errors, crResult.reason);
-
-    if (ssSearchResult.status === "fulfilled") candidates.push(...ssSearchResult.value);
-    else rememberLookupError(errors, ssSearchResult.reason);
-
-    if (dblpResult.status === "fulfilled") candidates.push(...dblpResult.value);
-    else rememberLookupError(errors, dblpResult.reason);
-
-    if (openReviewResult.status === "fulfilled") candidates.push(...openReviewResult.value);
-    else rememberLookupError(errors, openReviewResult.reason);
-
-    candidates.push(...await crossrefDoiRecords(candidates, run));
-    const withArxiv = await addLocalArxivCandidates(A.dedupeRecords(candidates), original, run);
-    throwIfAllLookupsFailed(withArxiv, errors);
-    return A.dedupeRecords(withArxiv);
+    const classification = P.classifyAbsence(outcomes, candidates);
+    const sourceWarnings = P.sourceWarnings(outcomes);
+    if (classification === "lookup_failed") {
+      const error = new Error("one or more primary metadata providers were unavailable");
+      error.name = "ProviderLookupError";
+      error.kind = "lookup_failed";
+      error.sourceWarnings = sourceWarnings;
+      throw error;
+    }
+    return { candidates, sourceWarnings };
   }
 
-  function selectedFirstCandidateChoices(selectedCandidate, candidates, selectedIndex) {
+  function selectedFirstCandidateChoices(selectedCandidate, candidates, selectedIndex, selection) {
     const indexed = candidates.map((choice, index) => ({ choice, index }));
     if (selectedIndex > 0 && selectedIndex < indexed.length) {
       const [selected] = indexed.splice(selectedIndex, 1);
@@ -480,15 +446,24 @@
         index: selectedIndex >= 0 ? selectedIndex : indexed[0].index,
       };
     }
-    return indexed.map(({ choice, index }) => ({
-      ...choice,
-      _choiceIndex: index,
-      _paperUrl: B.paperUrlForEntry(choice),
-    }));
+    return indexed.map(({ choice, index }) => {
+      const autoEligible = selection.status === "auto_apply" &&
+        sameRecord(choice, selection.canonical) && choice._enrichmentNeedsReview !== true;
+      return {
+        ...choice,
+        _choiceIndex: index,
+        _paperUrl: B.paperUrlForEntry(choice),
+        _autoEligible: autoEligible,
+        _canonicalStatus: autoEligible ? "auto_apply" : "needs_review",
+        _canonicalReason: autoEligible ? selection.reason : "alternative_not_auto_eligible",
+        _directLinkKind: autoEligible ? selection.linkKind : "",
+        _selectedVersionClass: selection.selectedVersionClass,
+      };
+    });
   }
 
-  function attachRerankDecision(candidate, aiChoice, candidates, selectedIndex, selection) {
-    const candidateChoices = selectedFirstCandidateChoices(candidate, candidates, selectedIndex);
+  function attachRerankDecision(candidate, aiChoice, candidates, selectedIndex, selection, sourceWarnings) {
+    const candidateChoices = selectedFirstCandidateChoices(candidate, candidates, selectedIndex, selection);
     return {
       ...candidate,
       _rerankStatus: aiChoice?.status || "",
@@ -504,6 +479,7 @@
       _canonicalReason: selection.reason,
       _directLinkKind: selection.linkKind,
       _selectedVersionClass: selection.selectedVersionClass,
+      _sourceWarnings: sourceWarnings || [],
     };
   }
 
@@ -511,7 +487,7 @@
     return !!left && !!right && left._recordSource === right._recordSource && left._recordId === right._recordId;
   }
 
-  function buildRerankedCandidate(selection, rankedBest, candidateChoices, aiChoice) {
+  function buildRerankedCandidate(selection, rankedBest, candidateChoices, aiChoice, sourceWarnings) {
     let selected = selection.status === "auto_apply" ? selection.canonical : rankedBest;
     if (selection.status !== "auto_apply" && candidateChoices.some(candidate => sameRecord(candidate, aiChoice?.candidate)))
       selected = candidateChoices.find(candidate => sameRecord(candidate, aiChoice.candidate));
@@ -524,7 +500,8 @@
       aiChoice,
       candidateChoices,
       selectedIndex >= 0 ? selectedIndex : candidateChoices.findIndex(candidate => sameRecord(candidate, selected)),
-      selection
+      selection,
+      sourceWarnings,
     );
   }
 
@@ -535,19 +512,28 @@
   }
 
   async function lookupPaperWithRerank(title, lookupEntry, run, allowLlm = true, originalSnapshot = lookupEntry) {
-    const candidates = await searchCandidatePool(title, lookupEntry, run);
+    const pool = await searchCandidatePool(title, lookupEntry, run);
     if (!isRunActive(run)) return null;
+    const candidates = pool.candidates;
     const original = originalSnapshot;
     const preferPublished = run.settings.preferPublished;
-    const selection = A.selectCanonical(A.createOriginal(original), candidates, { preferPublished });
-    const candidateChoices = includeCanonicalChoice(B.topCandidates(selection.candidates, original, {
+    const originalRecord = A.createOriginal(original);
+    const selection = A.selectCanonical(originalRecord, candidates, { preferPublished });
+    const titleRankedChoices = B.topCandidates(selection.candidates, original, {
       preferPublished,
       limit: MAX_CANDIDATE_CHOICES,
-    }), selection);
+    });
+    const reviewChoices = P.reviewCandidates(originalRecord, selection.candidates, titleRankedChoices, {
+      directLinkKinds: A.directLinkKinds,
+      limit: MAX_CANDIDATE_CHOICES,
+    });
+    const candidateChoices = includeCanonicalChoice(reviewChoices, selection);
     const ranked = B.rerankCandidates(candidateChoices, original, { preferPublished });
-    if (!ranked.best && selection.status !== "auto_apply") return null;
+    const reviewBest = selection.status === "needs_review" ? candidateChoices[0] : ranked.best;
+    if (!reviewBest && selection.status !== "auto_apply")
+      return candidates.length ? null : { _lookupAbsence: "not_found", _sourceWarnings: pool.sourceWarnings };
 
-    const heuristic = buildRerankedCandidate(selection, ranked.best, candidateChoices, null);
+    const heuristic = buildRerankedCandidate(selection, reviewBest, candidateChoices, null, pool.sourceWarnings);
     const provider = run.settings.rerankProvider;
     const shouldUseLlm = B.shouldCallLlmRerank(ranked, candidateChoices, original, {
       preferPublished,
@@ -570,7 +556,7 @@
             onStatus: message => runController.ifActive(run, () => setGemmaRerankStatus(message)),
           });
           if (!isRunActive(run)) return null;
-          return buildRerankedCandidate(selection, ranked.best, candidateChoices, aiChoice);
+          return buildRerankedCandidate(selection, reviewBest, candidateChoices, aiChoice, pool.sourceWarnings);
         } catch (err) {
           if (!isRunActive(run)) return null;
           console.warn(provider + " rerank failed; using heuristic candidate:", err.message);
@@ -877,7 +863,13 @@
     if (!isRunActive(run)) return null;
     if (lookupError) {
       const r = buildResult(run, entry, index, "lookup_failed", 0, [], {}, null);
-      r.lookup_error = lookupError.message || String(lookupError);
+      r.lookup_error = "metadata providers unavailable";
+      r.source_warnings = lookupError.sourceWarnings || [];
+      return r;
+    }
+    if (found?._lookupAbsence === "not_found") {
+      const r = buildResult(run, entry, index, "not_found", 0, [], {}, null);
+      r.source_warnings = found._sourceWarnings || [];
       return r;
     }
     if (!found) return buildResult(run, entry, index, "not_found", 0, [], {}, null);
@@ -891,10 +883,6 @@
     let fieldDiffs = cmp.field_diffs;
     if (finalStatus === "needs_review" && found && !fieldDiffs.length)
       fieldDiffs = B.fieldDiffsForNeedsReview(entry, found);
-    if (finalStatus === "needs_review" && B.fieldDiffsAreEquivalent(fieldDiffs)) {
-      finalStatus = "verified";
-      fieldDiffs = [];
-    }
     return buildResult(run, entry, index, finalStatus, cmp.title_score, fieldDiffs, cmp.suggested, found);
   }
 
@@ -945,10 +933,6 @@
             let fieldDiffs = cmp.field_diffs;
             if (finalStatus === "needs_review" && !fieldDiffs.length)
               fieldDiffs = B.fieldDiffsForNeedsReview(entry, patchedFound);
-            if (finalStatus === "needs_review" && B.fieldDiffsAreEquivalent(fieldDiffs)) {
-              finalStatus = "verified";
-              fieldDiffs = [];
-            }
             const patched = buildResult(run, entry, i, finalStatus, cmp.title_score, fieldDiffs, cmp.suggested, patchedFound);
             if (preserveDecision) {
               run.decisions[i] = currentDecision;
@@ -1055,6 +1039,7 @@
       pending_rerank: found ? (found._pendingRerank || null) : null,
       duplicate_of: run.duplicateOfByIndex[index] || null,
       lookup_error: null,
+      source_warnings: found ? (found._sourceWarnings || []) : [],
       canonical_reason: found ? (found._canonicalReason || "") : "",
       run_snapshot: run.settings,
     };
@@ -1404,6 +1389,10 @@
         : esc(tEvidence("notFoundNoTitle"))}</div>`;
     }
 
+    const sourceWarningHTML = r.source_warnings?.length
+      ? `<div class="review-hint source-warning">Source status: ${r.source_warnings.map(esc).join(" ")}</div>`
+      : "";
+
     const candidateHTML = candidateChoiceHTML(r);
 
     let actionsHTML = "";
@@ -1471,7 +1460,7 @@
           ${r.selected_choice === "exclude" ? "" : `<span class="status-tag tag-${r.status}">${statusLabel(r.status)}</span>`}
         </div>
       </div>
-    </div>${duplicateHTML}${reviewHintHTML}${notFoundHintHTML}${candidateHTML}${mixedWarningHTML}${r.selected_choice === "exclude" ? "" : diffHTML}${r.selected_choice === "exclude" ? "" : actionsHTML}${paperOpenLink}${searchLinks}`;
+    </div>${duplicateHTML}${reviewHintHTML}${sourceWarningHTML}${notFoundHintHTML}${candidateHTML}${mixedWarningHTML}${r.selected_choice === "exclude" ? "" : diffHTML}${r.selected_choice === "exclude" ? "" : actionsHTML}${paperOpenLink}${searchLinks}`;
 
     // Cache normalized search haystack so search filtering stays cheap.
     card.dataset.searchHay = `${(r.entry_id || "").toLowerCase()} ${B.stripLatex(r.title || "").toLowerCase()}`;
@@ -1490,13 +1479,11 @@
       : B.resolveRerankStatus(cmp.status, candidate._rerankStatus);
     if (status !== "not_found" && B.hasCriticalMetadataConflict(entry, candidate))
       status = "needs_review";
+    if (candidate._autoEligible !== true)
+      status = "needs_review";
     let fieldDiffs = status === "needs_review" && !cmp.field_diffs.length
       ? B.fieldDiffsForNeedsReview(entry, candidate)
       : cmp.field_diffs;
-    if (status === "needs_review" && B.fieldDiffsAreEquivalent(fieldDiffs)) {
-      status = "verified";
-      fieldDiffs = [];
-    }
     return { cmp, fieldDiffs, status };
   }
 

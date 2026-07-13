@@ -60,10 +60,11 @@
       return unavailable(kind, `WebGPU ${scope} failed; page reload is required.`, error);
     }
 
-    async function bounded(scope, operation, onStatus) {
+    async function bounded(scope, operation, onStatus, signal) {
       try {
         const outcome = await request(({ signal }) => operation(signal), {
           ...requestOptions,
+          signal,
           attemptTimeoutMs: timeoutMs,
           totalTimeoutMs: timeoutMs,
           maxAttempts: 1,
@@ -72,11 +73,12 @@
         });
         return outcome.value;
       } catch (error) {
+        if (error?.kind === "cancelled" || error?.name === "AbortError") throw error;
         throw quarantine(scope, error, onStatus);
       }
     }
 
-    function load(onStatus) {
+    function load(onStatus, signal) {
       ensureUsable(onStatus);
       if (!loadAttempted) {
         loadAttempted = true;
@@ -85,23 +87,33 @@
           "load",
           signal => options.load({ signal, onStatus: safeStatus }),
           onStatus,
-        );
+          signal,
+        ).catch(error => {
+          if (error?.kind === "cancelled" || error?.name === "AbortError") {
+            quarantined = true;
+            quarantineCause ||= error;
+          }
+          throw error;
+        });
       }
       return loadPromise;
     }
 
     function complete(messages, completeOptions = {}) {
       const onStatus = completeOptions.onStatus;
+      const signal = completeOptions.signal;
       const modelOptions = { ...completeOptions };
       delete modelOptions.onStatus;
+      delete modelOptions.signal;
       const job = queueTail.then(async () => {
         ensureUsable(onStatus);
-        const model = await load(onStatus);
+        const model = await load(onStatus, signal);
         ensureUsable(onStatus);
         return bounded(
           "complete",
-          () => model.complete(messages, modelOptions),
+          attemptSignal => model.complete(messages, { ...modelOptions, signal: attemptSignal }),
           onStatus,
+          signal,
         );
       });
       queueTail = job.catch(() => undefined);

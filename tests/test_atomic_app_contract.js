@@ -36,6 +36,20 @@ assert.match(app, /setTimeout\(\(\) => \{\s*if \(!isRunActive\(run\)\) return;\s
 assert.ok(app.includes("originals: run.originals"));
 assert.ok(app.includes("function buildPreviewState()"));
 assert.ok(app.includes("const D = window.BibDecisionPolicy"));
+assert.ok(app.includes("const P = window.BibProviderRuntime"));
+assert.ok(app.includes("budget: R.BUDGETS.metadata"));
+assert.ok(app.includes("budget = R.BUDGETS.dblp"));
+assert.ok(app.includes("budget: R.BUDGETS.arxiv"));
+assert.ok(app.includes("const deadlineAt = P.budgetDeadline(R.BUDGETS.dblp)"));
+assert.ok(app.includes("const budget = P.remainingBudget(R.BUDGETS.dblp, deadlineAt)"));
+assert.ok(app.includes("const classification = P.classifyAbsence(outcomes, candidates)"));
+assert.ok(app.includes("const sourceWarnings = P.sourceWarnings(outcomes)"));
+assert.ok(app.includes("const reviewChoices = P.reviewCandidates(originalRecord, selection.candidates, titleRankedChoices"));
+assert.ok(app.includes('const reviewBest = selection.status === "needs_review" ? candidateChoices[0] : ranked.best'));
+assert.ok(app.includes('{ _lookupAbsence: "not_found", _sourceWarnings: pool.sourceWarnings }'));
+assert.ok(app.includes('if (found?._lookupAbsence === "not_found")'));
+assert.ok(app.includes("Source status: ${r.source_warnings.map(esc).join(\" \")}"));
+assert.ok(app.includes("if (candidate._autoEligible !== true)"));
 assert.ok(app.includes("decisionStore = D.createStore()"));
 assert.ok(app.includes("D.initialOutcome(status, proposedCandidate, 0)"));
 assert.ok(app.includes("D.canApplySuggestion(currentDecision, run.fieldEdits[i] || {})"));
@@ -60,11 +74,14 @@ assert.ok(
 const libIndex = html.indexOf("lib.js?v=");
 const runControllerIndex = html.indexOf("run-controller.js?v=");
 const atomicIndex = html.indexOf("atomic-candidates.js?v=");
+const providerIndex = html.indexOf("provider-runtime.js?v=");
 const decisionIndex = html.indexOf("decision-policy.js?v=");
 const appIndex = html.indexOf("app.js?v=");
-assert.ok(libIndex >= 0 && runControllerIndex > libIndex && atomicIndex > runControllerIndex && decisionIndex > atomicIndex && appIndex > decisionIndex);
-for (const script of ["lib.js", "request.js", "run-controller.js", "vllm-reranker.js", "citation-audit.js", "app.js"])
+assert.ok(libIndex >= 0 && runControllerIndex > libIndex && atomicIndex > runControllerIndex && providerIndex > atomicIndex && decisionIndex > providerIndex && appIndex > decisionIndex);
+for (const script of ["lib.js", "request.js", "run-controller.js"])
   assert.ok(html.includes(`${script}?v=20260712-run-ownership-final`), `stale run-ownership asset version: ${script}`);
+for (const script of ["webgpu-engine.js", "provider-runtime.js", "gemma-reranker.js", "vllm-reranker.js", "citation-audit.js", "app.js"])
+  assert.ok(html.includes(`${script}?v=20260712-provider-failures`), `stale provider-failure asset version: ${script}`);
 assert.match(html, /<option value="0" selected>All<\/option>/);
 assert.doesNotMatch(html, /<option value="10" selected>/);
 

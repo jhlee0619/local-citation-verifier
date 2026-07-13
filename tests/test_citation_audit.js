@@ -3,6 +3,7 @@
 const assert = require("assert");
 const audit = require("../docs/citation-audit.js");
 const lib = require("../docs/lib.js");
+const providerRuntime = require("../docs/provider-runtime.js");
 const runs = require("../docs/run-controller.js");
 
 let passed = 0;
@@ -79,10 +80,39 @@ test("retries transient evidence fetch failures before returning JSON", async ()
     return { ok: true, json: async () => ({ title: "Recovered" }) };
   };
   const data = await audit.fetchJson("/api/test", {}, {
-    retries: 1, baseDelayMs: 0, origin: "http://localhost", fetch,
+    budget: { attemptTimeoutMs: 50, maxAttempts: 2, totalTimeoutMs: 100, baseDelayMs: 0, maxDelayMs: 0 },
+    origin: "http://localhost", fetch,
   });
   assert.strictEqual(data.title, "Recovered");
   assert.strictEqual(calls, 2);
+});
+
+test("shares one evidence deadline across DOI and title fallback", async () => {
+  const budgets = [];
+  let calls = 0;
+  const runtime = {
+    ...providerRuntime,
+    requestJson: async (_url, _params, options) => {
+      budgets.push(options.budget);
+      calls++;
+      return calls === 1 ? null : { data: [{ title: "Recovered by title" }] };
+    },
+  };
+  class TestRequestError extends Error {}
+  const requestApi = {
+    BUDGETS: {
+      evidence: { attemptTimeoutMs: 41000, maxAttempts: 1, totalTimeoutMs: 41000 },
+    },
+    RequestError: TestRequestError,
+  };
+  const evidence = await audit.fetchEvidence({
+    title: "Recovered by title",
+    doi: "10.1000/missing",
+  }, { providerRuntime: runtime, requestApi, now: () => 0 });
+  assert.strictEqual(evidence.title, "Recovered by title");
+  assert.strictEqual(calls, 2);
+  assert.ok(budgets[0].totalTimeoutMs <= 41000);
+  assert.ok(budgets[1].totalTimeoutMs <= budgets[0].totalTimeoutMs);
 });
 
 test("classifies only 429 and 5xx gateway statuses as transient", () => {
@@ -173,7 +203,8 @@ test("caller abort stops evidence retries and is never converted to lookupError"
     throw options.signal.reason;
   };
   const options = {
-    retries: 3, baseDelayMs: 1, signal: controller.signal,
+    budget: { attemptTimeoutMs: 50, maxAttempts: 3, totalTimeoutMs: 100, baseDelayMs: 1, maxDelayMs: 1 },
+    signal: controller.signal,
     origin: "http://localhost", fetch,
   };
   await assert.rejects(
@@ -217,6 +248,76 @@ test("falls back to insufficient evidence for invalid verdict", () => {
   const result = audit.parseJudgement('{"verdict":"certain","confidence":9}');
   assert.strictEqual(result.verdict, "insufficient_evidence");
   assert.strictEqual(result.confidence, 1);
+  assert.ok(result.riskFlags.includes("invalid_model_output"));
+});
+
+test("sanitizes citation evidence provider failures", async () => {
+  const providerRuntime = {
+    requestJson: async () => { throw new Error("secret upstream stack and token"); },
+    budgetDeadline: () => 100,
+    remainingBudget: () => ({}),
+    sourceWarnings: outcomes => {
+      assert.strictEqual(outcomes[0].source, "citation_evidence");
+      assert.strictEqual(outcomes[0].role, "enrichment");
+      return ["Citation evidence temporarily unavailable."];
+    },
+  };
+  const requestApi = { BUDGETS: { evidence: {} } };
+  const evidence = await audit.fetchEvidence({ title: "Paper" }, { providerRuntime, requestApi });
+  assert.strictEqual(evidence.lookupError, "Citation evidence temporarily unavailable.");
+  assert.ok(!evidence.lookupError.includes("secret"));
+});
+
+test("falls back conservatively when local citation AI times out", async () => {
+  const requestApi = {
+    BUDGETS: { vllm: {} },
+    request: async () => {
+      const error = new Error("upstream details");
+      error.kind = "deadline_timeout";
+      throw error;
+    },
+  };
+  const result = await audit.judgeCitation({
+    context: { key: "x", sentence: "A claim \\cite{x}." },
+    entry: { title: "Known Paper", author: "Doe, Jane", year: "2024" },
+    evidence: { title: "Known Paper", abstract: "Evidence text." },
+    provider: "vllm",
+    language: "en",
+    requestApi,
+  });
+  assert.strictEqual(result.verdict, "insufficient_evidence");
+  assert.strictEqual(result.reason, "Local AI judgement was unavailable; no support verdict was inferred.");
+  assert.deepStrictEqual(result.riskFlags, ["local_ai_unavailable"]);
+  assert.ok(!result.reason.includes("upstream"));
+});
+
+test("does not cache failed citation model output", async () => {
+  for (const failureFlag of ["invalid_model_output", "local_ai_unavailable", "lookup_failed"]) {
+    const controller = runs.createRunController();
+    controller.startVerification({ entries: [], settings: {} });
+    const runContext = controller.startAudit({
+      inputs: {},
+      settings: { speedMode: "thorough", provider: "vllm", evidenceLanguage: "en" },
+    });
+    let judgementCalls = 0;
+    const contexts = [
+      { key: "same", sentence: "Repeated claim." },
+      { key: "same", sentence: "Repeated claim." },
+    ];
+    await audit.runAuditContexts({
+      controller,
+      runContext,
+      queue: lib.runBoundedQueue,
+      contexts,
+      entriesByKey: new Map([["same", { title: "Known Paper" }]]),
+      fetchEvidenceFn: async () => ({ title: "Known Paper", abstract: "Evidence" }),
+      judgeCitationFn: async () => {
+        judgementCalls++;
+        return { verdict: "insufficient_evidence", riskFlags: [failureFlag] };
+      },
+    });
+    assert.strictEqual(judgementCalls, 2, failureFlag);
+  }
 });
 
 test("summarizes citation verdict counts", () => {

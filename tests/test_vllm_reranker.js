@@ -104,9 +104,10 @@ async function testCallerAbortReachesFetchAndDoesNotPopulateCache() {
   const originalFetch = globalThis.fetch;
   const controller = new AbortController();
   let calls = 0;
+  let observedSignal = null;
   globalThis.fetch = async (_url, options) => {
     calls++;
-    assert.strictEqual(options.signal, controller.signal);
+    observedSignal = options.signal;
     return new Promise((_resolve, reject) => {
       options.signal.addEventListener("abort", () => reject(options.signal.reason), { once: true });
     });
@@ -121,13 +122,72 @@ async function testCallerAbortReachesFetchAndDoesNotPopulateCache() {
   };
   try {
     const pending = vllm.rerank(request);
+    await Promise.resolve();
     controller.abort(new Error("run replaced"));
-    await assert.rejects(pending, /run replaced/);
+    await assert.rejects(pending, error => error.kind === "cancelled" && error.reason?.message === "run replaced");
     assert.strictEqual(calls, 1);
+    assert.notStrictEqual(observedSignal, controller.signal);
+    assert.strictEqual(observedSignal.aborted, true);
   } finally {
     globalThis.fetch = originalFetch;
     vllm.clearCache?.();
   }
+}
+
+async function testUsesVllmBudgetAndDerivedAttemptSignal() {
+  const caller = new AbortController();
+  const derived = new AbortController();
+  let requestOptions = null;
+  let fetchSignal = null;
+  const requestApi = {
+    BUDGETS: {
+      vllm: { attemptTimeoutMs: 30000, maxAttempts: 1, totalTimeoutMs: 30000 },
+    },
+    request: async (attempt, options) => {
+      requestOptions = options;
+      return { value: await attempt({ signal: derived.signal }) };
+    },
+  };
+  const result = await vllm.rerank({
+    original: { title: "Budget" },
+    candidates: [{ title: "A" }, { title: "B" }],
+    parseChoice: lib.parseRerankChoice,
+    preferPublished: true,
+    endpoint: "/api/rerank/vllm-budget",
+    signal: caller.signal,
+    requestApi,
+    fetch: async (_url, options) => {
+      fetchSignal = options.signal;
+      return { ok: true, json: async () => ({ output: '{"best": 1}' }) };
+    },
+  });
+  assert.strictEqual(result.index, 0);
+  assert.strictEqual(requestOptions.attemptTimeoutMs, 30000);
+  assert.strictEqual(requestOptions.maxAttempts, 1);
+  assert.strictEqual(requestOptions.totalTimeoutMs, 30000);
+  assert.strictEqual(requestOptions.signal, caller.signal);
+  assert.strictEqual(fetchSignal, derived.signal);
+  vllm.clearCache?.();
+}
+
+async function testHealthUsesHealthBudget() {
+  const budget = { attemptTimeoutMs: 5000, maxAttempts: 1, totalTimeoutMs: 5000 };
+  let requestOptions = null;
+  const requestApi = {
+    BUDGETS: { health: budget },
+    request: async (attempt, options) => {
+      requestOptions = options;
+      return { value: await attempt({ signal: new AbortController().signal }) };
+    },
+  };
+  const result = await vllm.health("/health-budget", {
+    requestApi,
+    fetch: async () => ({ ok: true, json: async () => ({ ready: true }) }),
+  });
+  assert.deepStrictEqual(result, { ready: true });
+  assert.strictEqual(requestOptions.attemptTimeoutMs, budget.attemptTimeoutMs);
+  assert.strictEqual(requestOptions.maxAttempts, budget.maxAttempts);
+  assert.strictEqual(requestOptions.totalTimeoutMs, budget.totalTimeoutMs);
 }
 
 (async () => {
@@ -136,5 +196,7 @@ async function testCallerAbortReachesFetchAndDoesNotPopulateCache() {
   await testCachesIdenticalRerankRequests();
   await testHealthReportsUnavailableWithoutThrowing();
   await testCallerAbortReachesFetchAndDoesNotPopulateCache();
+  await testUsesVllmBudgetAndDerivedAttemptSignal();
+  await testHealthUsesHealthBudget();
   console.log("vLLM reranker tests passed");
 })();
