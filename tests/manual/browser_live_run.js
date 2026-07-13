@@ -6,9 +6,11 @@ const path = require("path");
 const { chromium } = require("playwright");
 
 const APP_URL = process.env.APP_URL || "http://127.0.0.1:8088/";
-const BIB_PATH = process.argv[2] || path.join(__dirname, "fixtures/user-stroke-bib.bib");
-const LIVE_HTML = path.join(__dirname, "fixtures/browser-run-live.html");
-const SCREENSHOT_DIR = path.join(__dirname, "fixtures/browser-shots");
+const FIXTURES_DIR = path.resolve(__dirname, "../fixtures");
+const BIB_PATH = process.argv[2] || path.join(FIXTURES_DIR, "user-stroke-bib.bib");
+const LIVE_HTML = path.join(FIXTURES_DIR, "browser-run-live.html");
+const SCREENSHOT_DIR = path.join(FIXTURES_DIR, "browser-shots");
+const MANUAL_LIVE_NETWORK_POLL_LIMIT = 180;
 
 function esc(s) {
   return String(s || "")
@@ -74,9 +76,9 @@ async function snap(page, name) {
     await page.click("#btn-verify-paste");
 
     let lastText = "";
-    for (let i = 0; i < 180; i++) {
+    for (let i = 0; i < MANUAL_LIVE_NETWORK_POLL_LIMIT; i++) {
       await page.waitForTimeout(2000);
-      const progress = await page.textContent("#bar-progress-text").catch(() => "");
+      const progress = await page.textContent(".bar-progress-text").catch(() => "");
       const counts = await page.evaluate(() => {
         const pick = (sel) => document.querySelector(sel)?.textContent?.trim() || "0";
         return {
@@ -98,7 +100,7 @@ async function snap(page, name) {
         screenshot: await snap(page, "03-progress"),
       });
       const done = await page.evaluate(() => {
-        const t = document.querySelector("#bar-progress-text")?.textContent || "";
+        const t = document.querySelector(".bar-progress-text")?.textContent || "";
         return t.startsWith("Done —") || document.querySelector("#btn-download:not(.hidden)");
       });
       if (done) break;

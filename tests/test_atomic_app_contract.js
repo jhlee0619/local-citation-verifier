@@ -88,7 +88,7 @@ for (const script of ["lib.js", "request.js", "run-controller.js"])
   assert.ok(html.includes(`${script}?v=20260712-run-ownership-final`), `stale run-ownership asset version: ${script}`);
 for (const script of ["webgpu-engine.js", "provider-runtime.js", "gemma-reranker.js", "vllm-reranker.js", "citation-audit.js"])
   assert.ok(html.includes(`${script}?v=20260712-provider-failures`), `stale provider-failure asset version: ${script}`);
-assert.ok(html.includes("app.js?v=20260713-csp-vendor"), "stale app asset version after DBLP transport change");
+assert.ok(html.includes("app.js?v=20260713-browser-gate"), "stale app asset version after browser-gate fixes");
 assert.match(html, /<option value="0" selected>All<\/option>/);
 assert.doesNotMatch(html, /<option value="10" selected>/);
 

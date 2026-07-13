@@ -1136,10 +1136,10 @@
         : "";
       const score = Math.round(B.candidateScore(candidate, parsedEntries[r.index] || {}, {
         preferPublished: r.run_snapshot?.preferPublished === true,
-      }), cacheOptions(run));
+      }));
       const provenance = provenanceHTML(parsedEntries[r.index] || {}, candidate);
       return `<div class="candidate-option ${selected === key ? "active" : ""}">
-        <button class="candidate-option-btn" type="button" data-entry="${r.index}" data-choice-action="candidate" data-candidate-index="${index}">
+        <button class="candidate-option-btn" type="button" data-entry="${r.index}" data-choice-action="candidate" data-candidate-index="${index}" data-record-source="${esc(candidate._recordSource || "")}" data-record-id="${esc(candidate._recordId || "")}">
           <span class="candidate-rank">${index + 1}</span>
           <span class="candidate-main">
             <span class="candidate-title">${esc(title)}</span>
@@ -1426,13 +1426,13 @@
     const searchQuery = encodeURIComponent(B.stripLatex(r.title || ""));
     const searchLinks = (r.title || "").trim() ? `<div class="search-links">
       <a class="search-link" href="https://scholar.google.com/scholar?q=${searchQuery}" target="_blank" rel="noopener" title="Google Scholar">
-        <img src="https://scholar.google.com/favicon.ico" width="14" height="14" alt="Scholar">
+        <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true" class="search-link-svg"><rect width="14" height="14" rx="3" fill="#4285f4"/><text x="7" y="10" text-anchor="middle" font-size="8" fill="#fff">S</text></svg>
       </a>
       <a class="search-link" href="https://www.google.com/search?q=${searchQuery}" target="_blank" rel="noopener" title="Google">
-        <img src="https://www.google.com/favicon.ico" width="14" height="14" alt="Google">
+        <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true" class="search-link-svg"><rect width="14" height="14" rx="3" fill="#34a853"/><text x="7" y="10" text-anchor="middle" font-size="8" fill="#fff">G</text></svg>
       </a>
       <a class="search-link" href="https://www.semanticscholar.org/search?q=${searchQuery}" target="_blank" rel="noopener" title="Semantic Scholar">
-        <img src="https://www.semanticscholar.org/favicon.ico" width="14" height="14" alt="S2">
+        <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true" class="search-link-svg"><rect width="14" height="14" rx="3" fill="#1857b6"/><text x="7" y="10" text-anchor="middle" font-size="7" fill="#fff">S2</text></svg>
       </a>
       <a class="search-link search-link-crossref" href="https://search.crossref.org/?q=${searchQuery}&from_ui=yes" target="_blank" rel="noopener" title="CrossRef">
         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" aria-hidden="true" focusable="false" class="search-link-svg">
@@ -1441,7 +1441,7 @@
         </svg>
       </a>
       <a class="search-link" href="https://dblp.org/search?q=${searchQuery}" target="_blank" rel="noopener" title="DBLP">
-        <img src="https://dblp.org/img/dblp.icon.192x192.png" width="14" height="14" alt="DBLP">
+        <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true" class="search-link-svg"><rect width="14" height="14" rx="3" fill="#f6c344"/><text x="7" y="10" text-anchor="middle" font-size="7" fill="#111">D</text></svg>
       </a>
     </div>` : "";
 
