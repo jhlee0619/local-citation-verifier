@@ -2,7 +2,15 @@
   "name": "local-citation-verifier",
   "private": true,
   "type": "commonjs",
+  "scripts": {
+    "check:syntax": "node --check docs/lib.js && node --check docs/request.js && node --check docs/run-controller.js && node --check docs/webgpu-engine.js && node --check docs/atomic-candidates.js && node --check docs/provider-runtime.js && node --check docs/decision-policy.js && node --check docs/app.js && node --check docs/gemma-reranker.js && node --check docs/vllm-reranker.js && node --check docs/citation-audit.js && node --check playwright.config.js && node --check scripts/release-manifest.js && node --check scripts/post-deploy-smoke.js && node --check tests/browser/static-server.js && node --check tests/browser/fixtures.js && node --check tests/browser/harness.js && node --check tests/browser/verification.spec.js && node --check tests/browser/lifecycle.spec.js && node --check tests/manual/browser_live_run.js && node --check tests/test_release_manifest.js && node --check tests/test_post_deploy_smoke.js && node --check tests/test_workflow_contract.js",
+    "test:node": "node tests/test_lib.js && node tests/test_request.js && node tests/test_run_controller.js && node tests/test_provider_runtime.js && node tests/test_gemma_reranker.js && node tests/test_atomic_candidates.js && node tests/test_atomic_app_contract.js && node tests/test_decision_policy.js && node tests/test_speed_primitives.js && node tests/test_vllm_reranker.js && node tests/test_citation_audit.js && node tests/test_fixture_harness.js && node tests/test_fixture_snapshot.js && node tests/test_security_contract.js && node tests/test_release_manifest.js && node tests/test_post_deploy_smoke.js && node tests/test_workflow_contract.js",
+    "test:python": "python -m py_compile server/vllm_proxy_server.py && python -m unittest discover -s tests -p \"test_*.py\"",
+    "test:browser": "playwright test --project=chromium",
+    "test": "npm run check:syntax && npm run test:node && npm run test:python"
+  },
   "devDependencies": {
-    "fuzzball": "^2.2.3"
+    "@playwright/test": "1.61.1",
+    "fuzzball": "2.2.3"
   }
 }

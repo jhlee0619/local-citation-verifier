@@ -1,10 +1,14 @@
-(function (exports) {
+(function (root, exports) {
   "use strict";
 
+  const WebGpuEngine = typeof module !== "undefined" && module.exports
+    ? require("./webgpu-engine.js")
+    : root.BibWebGpuEngine;
+  const LOADER_REVISION = "158f16ae0f672943ca304d59c47c8e3a264e399e";
+  const MODEL_REVISION = "9fcec64df66cb1e4d972fc5cdc142afb25b2362c";
   const GEMMA_MODULE_URL =
-    "https://huggingface.co/spaces/webml-community/gemma-4-webgpu-kernels/resolve/main/gemma-4-e2b.js";
-
-  let modelPromise = null;
+    `https://huggingface.co/spaces/webml-community/gemma-4-webgpu-kernels/resolve/${LOADER_REVISION}/gemma-4-e2b.js`;
+  const WEBGPU_TIMEOUT_MS = 120000;
 
   const ALLOWED_RISK_FLAGS = [
     "title_mismatch",
@@ -138,45 +142,65 @@
     };
   }
 
-  async function loadModel(onStatus) {
-    if (!canUseWebGPU()) throw new Error("WebGPU is not available in this browser.");
-    if (!modelPromise) {
-      modelPromise = import(GEMMA_MODULE_URL).then(({ Gemma4Mobile }) =>
-        Gemma4Mobile.load(null, {
-          onProgress: event => {
-            const message = event.message || event.status || "Loading Gemma";
-            onStatus?.(message);
-          },
-        }));
-    }
-    return modelPromise;
+  function createGemmaEngine(options = {}) {
+    const importModule = options.importModule || (url => import(url));
+    const available = options.available || canUseWebGPU;
+    return WebGpuEngine.createEngine({
+      enabled: !!options.enabled,
+      timeoutMs: options.timeoutMs || WEBGPU_TIMEOUT_MS,
+      request: options.request,
+      requestOptions: options.requestOptions,
+      load: async ({ signal, onStatus }) => {
+        if (!available()) throw new Error("WebGPU is not available in this browser.");
+        const { Gemma4Mobile } = await importModule(GEMMA_MODULE_URL);
+        if (signal.aborted) throw signal.reason || new Error("WebGPU load was cancelled.");
+        if (!Gemma4Mobile?.load) throw new Error("Pinned Gemma loader is invalid.");
+        return Gemma4Mobile.load(null, {
+          revision: MODEL_REVISION,
+          signal,
+          onProgress: event => onStatus?.(event.message || event.status || "Loading Gemma"),
+        });
+      },
+    });
   }
 
-  async function rerank({ original, candidates, parseChoice, preferPublished, language, onStatus }) {
+  const defaultEngine = createGemmaEngine();
+
+  async function rerank({ original, candidates, parseChoice, preferPublished, language, onStatus, signal, engine = defaultEngine }) {
     if (!candidates || candidates.length < 2) return null;
     onStatus?.("Loading Gemma WebGPU reranker...");
-    const model = await loadModel(onStatus);
     onStatus?.("Reranking candidates on local GPU...");
     const prompt = buildPrompt(original, candidates, { preferPublished, language });
-    const output = await model.complete([{ role: "user", content: prompt }], { maxNewTokens: 160 });
+    const output = await engine.complete(
+      [{ role: "user", content: prompt }],
+      { maxNewTokens: 160, onStatus, signal },
+    );
     const decision = parseDecision(output, candidates.length, parseChoice);
     if (!decision) return null;
     return { ...decision, candidate: candidates[decision.index], output };
   }
 
-  async function completePrompt(prompt, { maxNewTokens = 220, onStatus } = {}) {
+  async function completePrompt(prompt, { maxNewTokens = 220, onStatus, signal, engine = defaultEngine } = {}) {
     if (!prompt || typeof prompt !== "string") throw new Error("Prompt is required.");
     onStatus?.("Loading Gemma WebGPU model...");
-    const model = await loadModel(onStatus);
     onStatus?.("Running local WebGPU judgement...");
-    return model.complete([{ role: "user", content: prompt }], { maxNewTokens });
+    return engine.complete([{ role: "user", content: prompt }], { maxNewTokens, onStatus, signal });
   }
 
+  exports.LOADER_REVISION = LOADER_REVISION;
+  exports.MODEL_REVISION = MODEL_REVISION;
   exports.GEMMA_MODULE_URL = GEMMA_MODULE_URL;
+  exports.WEBGPU_TIMEOUT_MS = WEBGPU_TIMEOUT_MS;
   exports.ALLOWED_RISK_FLAGS = ALLOWED_RISK_FLAGS;
   exports.canUseWebGPU = canUseWebGPU;
+  exports.createGemmaEngine = createGemmaEngine;
+  exports.setEnabled = value => defaultEngine.setEnabled(value);
+  exports.isEnabled = () => defaultEngine.state().enabled;
+  exports.isQuarantined = () => defaultEngine.state().quarantined;
+  exports.engineState = () => defaultEngine.state();
   exports.buildPrompt = buildPrompt;
   exports.parseDecision = parseDecision;
   exports.rerank = rerank;
   exports.completePrompt = completePrompt;
-})(typeof module !== "undefined" && module.exports ? module.exports : (window.BibGemmaReranker = {}));
+})(typeof globalThis !== "undefined" ? globalThis : this,
+  typeof module !== "undefined" && module.exports ? module.exports : (window.BibGemmaReranker = {}));

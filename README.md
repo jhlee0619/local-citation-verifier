@@ -50,12 +50,20 @@ vllm serve google/gemma-4-E2B-it --host 127.0.0.1 --port 8000 --max-model-len 81
 HOST=127.0.0.1 PORT=8088 VLLM_BASE_URL=http://127.0.0.1:8000 python3 server/vllm_proxy_server.py
 ```
 
-Use `HOST=127.0.0.1` when you only need local access. The proxy defaults to `0.0.0.0`, which exposes the static app and rerank endpoint on your LAN without authentication.
+The proxy defaults to `127.0.0.1` and requires no exposure flag for `127.0.0.1`, `::1`, or `localhost`. Keep the upstream vLLM service bound to `127.0.0.1`.
+
+Prefer an SSH tunnel for access from another machine. A non-loopback `HOST` is rejected before bind unless `ALLOW_REMOTE=1` is set exactly:
+
+```bash
+ALLOW_REMOTE=1 HOST=0.0.0.0 PORT=8088 VLLM_BASE_URL=http://127.0.0.1:8000 python3 server/vllm_proxy_server.py
+```
+
+This flag provides neither authentication nor TLS. Direct LAN/public exposure makes the static app, metadata proxy, and rerank API reachable. If a tunnel is unsuitable, put the proxy behind an authenticated HTTPS reverse proxy and a firewall allowlist; do not expose the upstream vLLM port.
 
 Then open one of these addresses and choose `vLLM server` in the rerank engine menu:
 
 - Same machine as the proxy: `http://127.0.0.1:8088/`
-- LAN access: `http://<server-host>:8088/`
+- Explicitly allowed LAN access: `http://<server-host>:8088/`
 - SSH tunnel from your laptop: `ssh -L 18088:127.0.0.1:8088 user@server.example.com`, then open `http://127.0.0.1:18088/`
 
 When the proxy health check succeeds, the app selects vLLM automatically. In this mode, rerank inference runs on the server GPU, while the UI still runs in your browser.
@@ -128,20 +136,37 @@ Network activity is limited to:
 
 ## Development
 
-Run the lightweight checks:
+Install the locked dependencies and run every non-browser check:
 
 ```bash
-node -c docs/lib.js
-node -c docs/gemma-reranker.js
-node -c docs/vllm-reranker.js
-node -c docs/citation-audit.js
-node -c docs/app.js
-node tests/test_lib.js
-node tests/test_vllm_reranker.js
-node tests/test_citation_audit.js
-python3 -m py_compile server/vllm_proxy_server.py
-python3 tests/test_vllm_proxy.py
+npm ci
+npm test
 ```
+
+Run the deterministic Chromium suite separately:
+
+```bash
+npx playwright install chromium
+npm run test:browser
+```
+
+The browser gate stubs all providers and proves downloaded BibTeX bytes, original-by-default review decisions, atomic title/author/year provenance, provider failure states, cancellation, deadlines, and WebGPU quarantine without using live APIs.
+
+For an optional live-network observation run, start the static app or local proxy at `http://127.0.0.1:8088/`, then run:
+
+```bash
+node tests/manual/browser_live_run.js
+```
+
+Set `APP_URL` or pass a BibTeX fixture path when needed. This is a manual diagnostic rather than a release gate and has a six-minute polling budget because public providers may be slow or unavailable.
+
+## Release operations
+
+CI and GitHub Pages deployment call the same reusable quality workflow. Deployment packages one SHA-named artifact after all tests pass, verifies its canonical file manifest after download, and deploys those exact bytes. The production smoke then verifies published hashes and initial browser behavior without submitting bibliography data to providers.
+
+Rollback uses the manual deploy workflow with a full 40-character lowercase commit SHA from `main`; it re-runs the complete gate before deployment. See [`docs/operations.md`](docs/operations.md) for the operator procedure and recovery criteria.
+
+Before the first workflow release, GitHub Pages must use **GitHub Actions** as its publishing source; legacy `main:/docs` publishing must be disabled. The deploy preflight fails closed until the Pages API reports `build_type: workflow`.
 
 ## Attribution
 

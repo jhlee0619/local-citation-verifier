@@ -8,6 +8,8 @@ venv/
 .venv-vllm/
 .env
 node_modules/
+playwright-report/
+test-results/
 .omc/
 *.bib
 !test_refs.bib

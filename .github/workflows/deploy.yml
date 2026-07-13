@@ -1,71 +1,201 @@
-name: Deploy to GitHub Pages
+name: Deploy verified GitHub Pages artifact
 
 on:
   push:
-    branches: [main, gh-pages]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      deploy_sha:
+        description: Full 40-character lowercase commit SHA on main to revalidate and deploy
+        required: true
+        type: string
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
   group: pages
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
-  test:
+  resolve:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: read
+    outputs:
+      source_sha: ${{ steps.resolve.outputs.source_sha }}
+      release_mode: ${{ steps.resolve.outputs.release_mode }}
+      pages_host: ${{ steps.pages.outputs.pages_host }}
+    steps:
+      - name: Require workflow-based Pages publishing
+        id: pages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/pages" > pages.json
+          build_type="$(node -e 'const p=require("./pages.json"); process.stdout.write(p.build_type || "")')"
+          pages_host="$(node -e 'const p=require("./pages.json"); process.stdout.write(new URL(p.html_url).hostname)')"
+          test "$build_type" = "workflow" || {
+            echo "GitHub Pages must use workflow publishing; disable legacy branch publishing before release" >&2
+            exit 1
+          }
+          echo "pages_host=$pages_host" >> "$GITHUB_OUTPUT"
+
+      - name: Check out current main history
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve and authorize the release commit
+        id: resolve
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PUSH_SHA: ${{ github.sha }}
+          DEPLOY_SHA: ${{ inputs.deploy_sha }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            [[ "$GITHUB_REF" == "refs/heads/main" ]] || { echo "manual deployment must run from main" >&2; exit 1; }
+            source_sha="$DEPLOY_SHA"
+            release_mode="rollback"
+          else
+            source_sha="$PUSH_SHA"
+            release_mode="forward"
+          fi
+          [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]] || { echo "deploy_sha must be a full 40-character lowercase commit SHA" >&2; exit 1; }
+          git cat-file -e "${source_sha}^{commit}"
+          test "$(git rev-parse "${source_sha}^{commit}")" = "$source_sha"
+          git merge-base --is-ancestor "$source_sha" origin/main || { echo "release commit is not an ancestor of origin/main" >&2; exit 1; }
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+          echo "release_mode=$release_mode" >> "$GITHUB_OUTPUT"
+
+  quality:
+    needs: resolve
+    uses: ./.github/workflows/quality.yml
+    with:
+      source_sha: ${{ needs.resolve.outputs.source_sha }}
+      produce_pages_artifact: true
+    permissions:
+      contents: read
+
+  verify_artifact:
+    needs: [resolve, quality]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Use Node.js 22
-        uses: actions/setup-node@v4
+      - name: Download immutable Pages artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
-          node-version: 22
+          name: ${{ needs.quality.outputs.pages_artifact_name }}
+          path: pages-artifact
 
-      - name: Install dependencies
-        run: npm ci
+      - name: Download release verification controls
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: ${{ needs.quality.outputs.control_artifact_name }}
+          path: release-control
 
-      - name: Syntax check
+      - name: Inspect, extract, and verify exact artifact bytes
+        env:
+          SOURCE_SHA: ${{ needs.resolve.outputs.source_sha }}
+          DOCS_TREE_ID: ${{ needs.quality.outputs.docs_tree_id }}
+          MANIFEST_DIGEST: ${{ needs.quality.outputs.manifest_digest }}
         run: |
-          node -c docs/lib.js
-          node -c docs/app.js
-          node -c docs/gemma-reranker.js
-          node -c docs/vllm-reranker.js
-          node -c docs/citation-audit.js
-
-      - name: Run JavaScript tests
-        run: |
-          node tests/test_lib.js
-          node tests/test_speed_primitives.js
-          node tests/test_vllm_reranker.js
-          node tests/test_citation_audit.js
-          node tests/test_fixture_harness.js
-          node tests/test_fixture_snapshot.js
-
-      - name: Run Python proxy tests
-        run: |
-          python3 -m py_compile server/vllm_proxy_server.py
-          python3 tests/test_vllm_proxy.py
+          set -euo pipefail
+          mapfile -t archives < <(find pages-artifact -type f -name 'artifact.tar' -print)
+          (( ${#archives[@]} == 1 )) || { echo "expected exactly one Pages archive" >&2; exit 1; }
+          archive="${archives[0]}"
+          while IFS= read -r entry; do
+            clean="${entry#./}"
+            [[ "$clean" != ".." && "$clean" != /* && "$clean" != ../* && "$clean" != */../* && "$clean" != */.. && "$clean" != *\\* ]] || {
+              echo "unsafe path in Pages archive: $entry" >&2
+              exit 1
+            }
+          done < <(tar -tf "$archive")
+          if tar -tvf "$archive" | awk 'substr($1,1,1) == "l" || substr($1,1,1) == "h" { found=1 } END { exit !found }'; then
+            echo "Pages archive contains a link" >&2
+            exit 1
+          fi
+          mkdir extracted
+          tar --extract --file "$archive" --directory extracted --no-same-owner --no-same-permissions
+          node release-control/release-manifest.js verify \
+            --site extracted --source-sha "$SOURCE_SHA" --docs-tree-id "$DOCS_TREE_ID"
+          test "$(tr -d '\n' < extracted/_release/manifest.sha256)" = "$MANIFEST_DIGEST"
 
   deploy:
-    needs: test
+    needs: [resolve, quality, verify_artifact]
     runs-on: ubuntu-latest
+    outputs:
+      page_url: ${{ steps.deployment.outputs.page_url }}
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b
 
-      - name: Setup Pages
-        uses: actions/configure-pages@v5
-
-      - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: docs
-
-      - name: Deploy to GitHub Pages
+      - name: Deploy the already verified artifact
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e
+        with:
+          artifact_name: ${{ needs.quality.outputs.pages_artifact_name }}
+
+  smoke:
+    needs: [resolve, quality, deploy]
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Download release verification controls
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: ${{ needs.quality.outputs.control_artifact_name }}
+          path: release-control
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: release-control/package-lock.json
+
+      - name: Install locked public-smoke runtime
+        working-directory: release-control
+        run: |
+          npm ci --ignore-scripts
+          npx playwright install --with-deps chromium
+
+      - name: Verify public bytes and initial browser behavior
+        working-directory: release-control
+        env:
+          PAGE_URL: ${{ needs.deploy.outputs.page_url }}
+          EXPECTED_HOST: ${{ needs.resolve.outputs.pages_host }}
+          RELEASE_MODE: ${{ needs.resolve.outputs.release_mode }}
+          PAGES_ARTIFACT_NAME: ${{ needs.quality.outputs.pages_artifact_name }}
+          PAGES_ARTIFACT_ID: ${{ needs.quality.outputs.pages_artifact_id }}
+        run: |
+          node post-deploy-smoke.js \
+            --url "$PAGE_URL" --expected-host "$EXPECTED_HOST" \
+            --manifest manifest.json --output deployment.json \
+            --release-mode "$RELEASE_MODE" \
+            --artifact-name "$PAGES_ARTIFACT_NAME" --artifact-id "$PAGES_ARTIFACT_ID"
+
+      - name: Preserve deployment evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: deployment-evidence-${{ needs.resolve.outputs.source_sha }}
+          path: release-control/deployment.json
+          if-no-files-found: warn
+          retention-days: 30

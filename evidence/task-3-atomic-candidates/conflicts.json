@@ -1,0 +1,26 @@
+{
+  "generic": {
+    "status": "needs_review",
+    "reason": "original_has_no_stable_id",
+    "canonical": "original"
+  },
+  "exactCoreConflict": {
+    "status": "needs_review",
+    "reason": "core_conflict",
+    "canonical": "original"
+  },
+  "incompletePublished": {
+    "status": "needs_review",
+    "reason": "no_complete_direct_record",
+    "canonical": "original"
+  },
+  "localCuration": {
+    "status": "needs_review",
+    "reason": "no_complete_direct_record",
+    "canonical": "original"
+  },
+  "nonTransitiveBridge": {
+    "originalToBridge": ["doi"],
+    "originalToArxivOnly": []
+  }
+}

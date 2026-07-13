@@ -105,6 +105,101 @@ test("handles double-quoted field values", () => {
   assert.strictEqual(entries[0].title, "Quoted Title");
 });
 
+test("preserves every escape pair in quoted values without corrupting following data", () => {
+  const bib = String.raw`@article{escaped,
+  title = "Using \LaTeX with H{\"a}ni and \{braces\}",
+  note = "literal \\ slash, escaped quote \"inside\", and final \\",
+  year = "2024",
+}
+@book{following,
+  title = "Following Entry",
+  year = "2025",
+}`;
+  const entries = lib.parseBib(bib);
+
+  assert.strictEqual(entries.length, 2);
+  assert.strictEqual(entries[0].title, String.raw`Using \LaTeX with H{\"a}ni and \{braces\}`);
+  assert.strictEqual(entries[0].note, String.raw`literal \\ slash, escaped quote \"inside\", and final \\`);
+  assert.strictEqual(entries[0].year, "2024");
+  assert.strictEqual(entries[1].ID, "following");
+  assert.strictEqual(entries[1].title, "Following Entry");
+});
+
+test("quoted escape values survive parse serialize parse round trips", () => {
+  const source = String.raw`@article{roundtrip,
+  title = "\LaTeX and H{\"a}ni",
+  note = "\{kept\}, \\, \"quoted\", final \\",
+  year = "2024",
+}`;
+  const first = lib.parseBib(source);
+  const serialized = lib.entriesToBib(first);
+  const second = lib.parseBib(serialized);
+
+  assert.deepStrictEqual(second, first);
+  assert.ok(serialized.includes(String.raw`\LaTeX and H{\"a}ni`));
+  assert.ok(serialized.includes(String.raw`\{kept\}, \\, \"quoted\", final \\`));
+});
+
+test("strict document parsing rejects malformed structure without partial entries", () => {
+  const unterminatedQuote = '@article{ok, title={Complete}}\n@article{bad, title="unterminated}';
+  const unterminatedEscape = '@article{bad, title="unterminated' + "\\";
+  const cases = [
+    {
+      source: unterminatedQuote,
+      reason: "unterminated_quote",
+      offset: unterminatedQuote.lastIndexOf('"'),
+    },
+    {
+      source: "@article{bad, title={unterminated}",
+      reason: "unterminated_brace",
+      offset: 8,
+    },
+    {
+      source: unterminatedEscape,
+      reason: "unterminated_escape",
+      offset: unterminatedEscape.length - 1,
+    },
+  ];
+
+  for (const { source, reason, offset } of cases) {
+    const parsed = lib.parseBibDocument(source);
+    assert.strictEqual(parsed.source, source);
+    assert.deepStrictEqual(parsed.entries, []);
+    assert.strictEqual(parsed.diagnostic.reason, reason);
+    assert.strictEqual(parsed.diagnostic.offset, offset);
+  }
+});
+
+test("strict document parsing accepts escaped delimiters and parenthesized entries", () => {
+  const source = String.raw`@article(ok,
+  title = "Escaped \"quote\" and final \\",
+  note = {Escaped \{ braces \}},
+  year = 2024,
+)`;
+  const parsed = lib.parseBibDocument(source);
+
+  assert.strictEqual(parsed.source, source);
+  assert.strictEqual(parsed.diagnostic, null);
+  assert.strictEqual(parsed.entries.length, 1);
+  assert.strictEqual(parsed.entries[0].ID, "ok");
+});
+
+test("strict document parsing does not treat quotes inside braced values as delimiters", () => {
+  const source = '@article{inch, title={A 5" Disk Study}, year={2024}}';
+  const parsed = lib.parseBibDocument(source);
+
+  assert.strictEqual(parsed.diagnostic, null);
+  assert.strictEqual(parsed.entries[0].title, 'A 5" Disk Study');
+});
+
+test("strict document parsing ignores assignment-like text inside braced values", () => {
+  const source = '@article{draft, note={status = "draft}, year={2024}}';
+  const parsed = lib.parseBibDocument(source);
+
+  assert.strictEqual(parsed.diagnostic, null);
+  assert.strictEqual(parsed.entries[0].note, 'status = "draft');
+});
+
 test("handles numeric field values", () => {
   const bib = `@article{test, title={Test}, year=2023}`;
   const entries = lib.parseBib(bib);
@@ -546,6 +641,7 @@ test("dblpToStandard preserves NeurIPS pages and DBLP provenance", () => {
 
   assert.strictEqual(candidate.booktitle, "Advances in Neural Information Processing Systems");
   assert.strictEqual(candidate.pages, "8583--8595");
+  assert.strictEqual(candidate.volume, "");
   assert.ok(provenance.badges.some(badge => badge.label === "DBLP"));
 });
 
@@ -715,7 +811,7 @@ test("collapses review-only exact title diffs as equivalent", () => {
   ]), true);
 });
 
-test("preserves detailed original fields when applying equivalent KDD candidate", () => {
+test("applies an equivalent KDD candidate without inheriting absent publication fields", () => {
   const original = {
     ENTRYTYPE: "inproceedings",
     ID: "wang2020multimodal",
@@ -739,9 +835,11 @@ test("preserves detailed original fields when applying equivalent KDD candidate"
 
   const applied = lib.applyCandidateToEntry(original, found);
 
-  assert.strictEqual(applied.author, original.author);
-  assert.strictEqual(applied.booktitle, original.booktitle);
+  assert.strictEqual(applied.author, found.author);
+  assert.strictEqual(applied.booktitle, found.booktitle);
   assert.strictEqual(applied.doi, original.doi);
+  assert.ok(!("pages" in applied));
+  assert.ok(!("publisher" in applied));
 });
 
 test("different years returns false", () => {
@@ -764,16 +862,10 @@ test("correction notices are not the same paper as the corrected article", () =>
 });
 
 // ═══════════════════════════════════════════════════════════════════════
-console.log("\n── mergeMetadata ──");
+console.log("\n── atomic merge boundary ──");
 
-test("primary fields take precedence", () => {
-  const primary = { title: "A", year: "2020", _source: "ss" };
-  const secondary = { title: "B", year: "2021", doi: "10.1234", _source: "cr" };
-  const merged = lib.mergeMetadata(primary, secondary);
-  assert.strictEqual(merged.title, "A");
-  assert.strictEqual(merged.year, "2020");
-  assert.strictEqual(merged.doi, "10.1234");
-  assert.strictEqual(merged._source, "ss+cr");
+test("does not expose the former broad cross-provider merge", () => {
+  assert.strictEqual(typeof lib.mergeMetadata, "undefined");
 });
 
 
@@ -803,7 +895,7 @@ test("isSamePaper allows one-year arXiv to proceedings publication drift", () =>
 });
 
 
-test("mergeMetadata does not copy CoRR volume into a published proceedings candidate", () => {
+test("published and preprint records stay separate at the library boundary", () => {
   const published = {
     title: "Denoising Diffusion Implicit Models",
     author: "Song, Jiaming and Meng, Chenlin and Ermon, Stefano",
@@ -824,16 +916,13 @@ test("mergeMetadata does not copy CoRR volume into a published proceedings candi
     _dblpKey: "journals/corr/abs-2010-02502",
   };
 
-  const merged = lib.mergeMetadata(published, corr);
-
-  assert.strictEqual(merged.booktitle, "International Conference on Learning Representations");
-  assert.strictEqual(merged.year, "2021");
-  assert.strictEqual(merged.volume, undefined);
-  assert.strictEqual(merged.url, "https://arxiv.org/abs/2010.02502");
-  assert.strictEqual(merged.eprint, "2010.02502");
+  const unique = lib.dedupeCandidates([published, corr]);
+  assert.strictEqual(unique.length, 2);
+  assert.ok(unique.includes(published));
+  assert.ok(unique.includes(corr));
 });
 
-test("mergeMetadata prefers published proceedings year over arXiv-linked Semantic Scholar year", () => {
+test("publication drift records remain distinct alternatives", () => {
   const ss = {
     title: "Image-to-Image Translation with Conditional Adversarial Networks",
     author: "Isola, Phillip and Zhu, Jun-Yan and Zhou, Tinghui and Efros, Alexei A.",
@@ -855,14 +944,13 @@ test("mergeMetadata prefers published proceedings year over arXiv-linked Semanti
     _dblpKey: "conf/cvpr/IsolaZZE17",
   };
 
-  const merged = lib.mergeMetadata(ss, dblp);
-
-  assert.strictEqual(merged.year, "2017");
-  assert.strictEqual(merged.doi, "10.1109/CVPR.2017.632");
-  assert.strictEqual(merged.pages, "1125--1134");
+  const unique = lib.dedupeCandidates([ss, dblp]);
+  assert.strictEqual(unique.length, 2);
+  assert.strictEqual(ss.year, "2016");
+  assert.strictEqual(dblp.year, "2017");
 });
 
-test("isSamePaper and mergeMetadata trust exact DOI over stale Semantic Scholar year", () => {
+test("exact DOI identifies a family without merging stale years", () => {
   const ss = {
     title: "Uncertainty Quantification in Deep MRI Reconstruction",
     author: "Edupuganti, Vineet and Mardani, Morteza and Vasanawala, Shreyas and Pauly, John",
@@ -884,19 +972,19 @@ test("isSamePaper and mergeMetadata trust exact DOI over stale Semantic Scholar 
   };
 
   assert.strictEqual(lib.isSamePaper(ss, crossref), true);
-  const merged = lib.mergeMetadata(ss, crossref);
-  assert.strictEqual(merged.year, "2021");
-  assert.strictEqual(merged.volume, "40");
-  assert.strictEqual(merged.number, "1");
-  assert.strictEqual(merged.pages, "239-250");
+  const unique = lib.dedupeCandidates([ss, crossref]);
+  assert.strictEqual(unique.length, 2);
+  assert.strictEqual(ss.year, "2019");
+  assert.strictEqual(crossref.year, "2021");
 });
 
-test("fills empty fields from secondary", () => {
-  const primary = { title: "A", _source: "ss" };
-  const secondary = { doi: "10.1234", volume: "5", _source: "cr" };
-  const merged = lib.mergeMetadata(primary, secondary);
-  assert.strictEqual(merged.doi, "10.1234");
-  assert.strictEqual(merged.volume, "5");
+test("does not infer field ownership from source concatenation", () => {
+  const unique = lib.dedupeCandidates([
+    { title: "A", _source: "ss", _recordId: "one" },
+    { doi: "10.1234", volume: "5", _source: "cr", _recordId: "two" },
+  ]);
+  assert.strictEqual(unique.length, 2);
+  assert.ok(unique.every(candidate => !String(candidate._source).includes("+")));
 });
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -943,7 +1031,7 @@ test("extracts old-style arXiv identifiers", () => {
   assert.strictEqual(lib.paperUrlForEntry({ eprint: "hep-th/9901001", archiveprefix: "arXiv" }), "https://arxiv.org/abs/hep-th/9901001");
 });
 
-test("applyCandidateToEntry preserves BibTeX identity and skips internal fields", () => {
+test("applyCandidateToEntry preserves only the BibTeX envelope and skips internal fields", () => {
   const original = { ENTRYTYPE: "article", ID: "smith2024", title: "Draft", note: "keep" };
   const candidate = {
     title: "Published",
@@ -958,11 +1046,11 @@ test("applyCandidateToEntry preserves BibTeX identity and skips internal fields"
   assert.strictEqual(result.title, "Published");
   assert.strictEqual(result.year, "2024");
   assert.strictEqual(result.doi, "10.1234/published");
-  assert.strictEqual(result.note, "keep");
+  assert.ok(!("note" in result));
   assert.ok(!("_source" in result));
 });
 
-test("applyCandidateToEntry preserves arXiv ID year over inconsistent candidate metadata", () => {
+test("applyCandidateToEntry applies the selected record year without transplanting", () => {
   const original = {
     ENTRYTYPE: "misc",
     ID: "medgemma2024",
@@ -983,10 +1071,10 @@ test("applyCandidateToEntry preserves arXiv ID year over inconsistent candidate 
   const result = lib.applyCandidateToEntry(original, candidate);
 
   assert.strictEqual(lib.arxivYearFromId(result.eprint), "2025");
-  assert.strictEqual(result.year, "2025");
+  assert.strictEqual(result.year, "2026");
 });
 
-test("applyCandidateToEntry preserves published year over matching arXiv submission year", () => {
+test("applyCandidateToEntry applies the selected preprint as one record", () => {
   const original = {
     ENTRYTYPE: "article",
     ID: "published2021",
@@ -1007,10 +1095,11 @@ test("applyCandidateToEntry preserves published year over matching arXiv submiss
 
   const result = lib.applyCandidateToEntry(original, candidate);
 
-  assert.strictEqual(result.year, "2021");
+  assert.strictEqual(result.year, "2019");
+  assert.strictEqual(result.journal, "arXiv");
 });
 
-test("applyCandidateToEntry keeps IEEE year when duplicate year input also has arXiv eprint", () => {
+test("applyCandidateToEntry does not restore the original year after selection", () => {
   const original = lib.parseBib(`@article{edupuganti2021uncertainty,
   title = {Uncertainty quantification in deep {MRI} reconstruction},
   author = {Edupuganti, Vineet and Mardani, Morteza and Vasanawala, Shreyas and Pauly, John M.},
@@ -1038,7 +1127,7 @@ test("applyCandidateToEntry keeps IEEE year when duplicate year input also has a
   const result = lib.applyCandidateToEntry(original, candidate);
 
   assert.strictEqual(original.year, "2021");
-  assert.strictEqual(result.year, "2021");
+  assert.strictEqual(result.year, "2019");
 });
 
 test("cleanBibliographyEntry applies publication corrections for known stroke fixture entries", () => {
@@ -1485,7 +1574,7 @@ test("cleanBibliographyEntry protects capitalization and adds missing article UR
   assert.ok(murphy.title.includes("{CT}"));
 });
 
-test("applyCandidateToEntry keeps conference exports from duplicating journal and booktitle", () => {
+test("applyCandidateToEntry keeps candidate conference fields atomic", () => {
   const original = { ENTRYTYPE: "inproceedings", ID: "he2022masked", booktitle: "CVPR" };
   const candidate = {
     booktitle: "Computer Vision and Pattern Recognition",
@@ -1494,12 +1583,12 @@ test("applyCandidateToEntry keeps conference exports from duplicating journal an
   };
   const result = lib.applyCandidateToEntry(original, candidate);
 
-  assert.strictEqual(result.booktitle, "Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition");
+  assert.strictEqual(result.booktitle, "Computer Vision and Pattern Recognition");
   assert.strictEqual(result.doi, "10.1109/CVPR52688.2022.01553");
   assert.ok(!("journal" in result));
 });
 
-test("applyCandidateToEntry keeps a published venue when a candidate reports a preprint venue", () => {
+test("applyCandidateToEntry does not transplant the original venue into a preprint candidate", () => {
   const original = {
     ENTRYTYPE: "article",
     ID: "alfaro2018image",
@@ -1519,12 +1608,14 @@ test("applyCandidateToEntry keeps a published venue when a candidate reports a p
 
   const result = lib.applyCandidateToEntry(original, candidate);
 
-  assert.strictEqual(result.journal, "Neuroimage");
+  assert.strictEqual(result.journal, "bioRxiv");
   assert.strictEqual(result.doi, "10.1016/j.neuroimage.2017.10.034");
-  assert.ok(!("publisher" in result));
+  assert.strictEqual(result.publisher, "openRxiv");
+  assert.ok(!("volume" in result));
+  assert.ok(!("pages" in result));
 });
 
-test("preservePublishedVenue keeps published metadata for comparison results", () => {
+test("preservePublishedVenue is a compatibility copy with no transplant", () => {
   const original = { journal: "Neuroimage", volume: "166", pages: "400--424" };
   const candidate = {
     journal: "bioRxiv",
@@ -1534,9 +1625,9 @@ test("preservePublishedVenue keeps published metadata for comparison results", (
 
   const result = lib.preservePublishedVenue(original, candidate);
 
-  assert.strictEqual(result.journal, "Neuroimage");
+  assert.strictEqual(result.journal, "bioRxiv");
   assert.strictEqual(result.doi, "10.1016/j.neuroimage.2017.10.034");
-  assert.ok(!("publisher" in result));
+  assert.strictEqual(result.publisher, "openRxiv");
 });
 
 test("candidateProvenance marks exact arXiv identity as high confidence", () => {
@@ -1583,7 +1674,7 @@ test("candidateProvenance flags preprint venue conflicts with published original
 
   assert.strictEqual(provenance.confidence, "Review");
   assert.ok(provenance.badges.some(badge => badge.label === "preprint venue"));
-  assert.ok(provenance.warnings.some(text => text.includes("preserved")));
+  assert.ok(provenance.warnings.some(text => text.includes("separate record alternatives")));
 });
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -1638,7 +1729,7 @@ test("prefers a published version over an arXiv/preprint candidate when title an
   const result = lib.rerankCandidates(candidates, original, { preferPublished: true });
 
   assert.strictEqual(result.best.journal, "Advances in Neural Information Processing Systems");
-  assert.strictEqual(result.bestIndex, 1);
+  assert.strictEqual(result.best.doi, "10.5555/3295222.3295349");
 });
 
 test("prefers local arXiv metadata over Semantic Scholar author ordering for arXiv records", () => {
@@ -1667,7 +1758,7 @@ test("prefers local arXiv metadata over Semantic Scholar author ordering for arX
   assert.strictEqual(result.best, arxiv);
 });
 
-test("prefers a published CVPR candidate over arXiv when the original is in proceedings", () => {
+test("keeps published CVPR and arXiv candidates as separate alternatives", () => {
   const original = {
     title: "Masked Autoencoders Are Scalable Vision Learners",
     author: "Kaiming He and Xinlei Chen and Saining Xie and Yanghao Li and Piotr Doll'ar and Ross B. Girshick",
@@ -1694,8 +1785,9 @@ test("prefers a published CVPR candidate over arXiv when the original is in proc
   };
   const unique = lib.dedupeCandidates([arxiv, cvpr]);
   const result = lib.rerankCandidates(unique, original, { preferPublished: true });
-  assert.strictEqual(unique.length, 1);
-  assert.strictEqual(unique[0], cvpr);
+  assert.strictEqual(unique.length, 2);
+  assert.ok(unique.includes(arxiv));
+  assert.ok(unique.includes(cvpr));
   assert.strictEqual(result.best, cvpr);
 });
 
@@ -1711,11 +1803,11 @@ test("limits candidate choices to the highest scoring matches", () => {
   const top = lib.topCandidates(candidates, original, { preferPublished: true, limit: 2 });
 
   assert.strictEqual(top.length, 2);
-  assert.strictEqual(top[0].doi, "10.5555/3295222.3295349");
-  assert.strictEqual(top[1].doi, "10.1/a");
+  assert.strictEqual(top[0].doi, "10.1/a");
+  assert.strictEqual(top[1].doi, "10.5555/3295222.3295349");
 });
 
-test("mergeMetadata prefers published venue over matching arXiv preprint metadata", () => {
+test("published and arXiv versions are not merged", () => {
   const arxiv = {
     title: "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks",
     author: "Lewis, Patrick and Perez, Ethan and Piktus, Aleksandara",
@@ -1737,13 +1829,13 @@ test("mergeMetadata prefers published venue over matching arXiv preprint metadat
     _arxivId: "2005.11401",
   };
 
-  const merged = lib.mergeMetadata(arxiv, published);
-
-  assert.strictEqual(merged.journal, "Neural Information Processing Systems");
-  assert.strictEqual(merged.eprint, "2005.11401");
+  const unique = lib.dedupeCandidates([arxiv, published]);
+  assert.strictEqual(unique.length, 2);
+  assert.strictEqual(arxiv.journal, "arXiv");
+  assert.strictEqual(published.journal, "Neural Information Processing Systems");
 });
 
-test("deduplicates candidates by DOI and same normalized title plus venue", () => {
+test("does not deduplicate across provider records by DOI or title plus venue", () => {
   const candidates = [
     { title: "A Study", doi: "10.1000/XYZ", journal: "Journal A" },
     { title: "A Study", doi: "10.1000/xyz", journal: "Journal B" },
@@ -1753,9 +1845,7 @@ test("deduplicates candidates by DOI and same normalized title plus venue", () =
 
   const unique = lib.dedupeCandidates(candidates);
 
-  assert.strictEqual(unique.length, 2);
-  assert.strictEqual(unique[0].journal, "Journal A");
-  assert.strictEqual(unique[1].journal, "Journal C");
+  assert.strictEqual(unique.length, 4);
 });
 
 test("prefers the candidate with the original arXiv identifier", () => {
@@ -2248,9 +2338,9 @@ test("prefers selected candidate published venue over suggested preprint", () =>
   assert.strictEqual(venue, "Proceedings of NeurIPS");
 });
 
-test("falls back to suggested published venue when candidate is absent", () => {
+test("does not transplant a published venue from a separate suggestion", () => {
   const venue = lib.preferPublishedVenueUpgrade(null, { journal: "Journal of Machine Learning Research" });
-  assert.strictEqual(venue, "Journal of Machine Learning Research");
+  assert.strictEqual(venue, "");
 });
 
 test("ignores preprint suggested venues", () => {
@@ -2261,7 +2351,7 @@ test("ignores preprint suggested venues", () => {
 // ═══════════════════════════════════════════════════════════════════════
 console.log("\n── preservePublishedVenue ──");
 
-test("preserves original publication year for one-year published venue drift", () => {
+test("does not transplant the original year for publication drift", () => {
   const original = {
     ENTRYTYPE: "article",
     title: "Deep Evidential Regression",
@@ -2280,17 +2370,17 @@ test("preserves original publication year for one-year published venue drift", (
   const comparison = lib.compareEntry(original, candidate);
   const applied = lib.applyCandidateToEntry(original, candidate);
 
-  assert.strictEqual(preserved.year, "2020");
-  assert.ok(!comparison.field_diffs.some(diff => diff.field === "year"));
-  assert.strictEqual(applied.year, "2020");
+  assert.strictEqual(preserved.year, "2019");
+  assert.ok(comparison.field_diffs.some(diff => diff.field === "year"));
+  assert.strictEqual(applied.year, "2019");
 });
 
-test("preserves original year when a preprint candidate has a different year", () => {
+test("does not transplant the original year into a preprint candidate", () => {
   const preserved = lib.preservePublishedVenue(
     { title: "MedGemma", year: "2025" },
     { title: "MedGemma", year: "2026", journal: "arXiv", _source: "arxiv" },
   );
-  assert.strictEqual(preserved.year, "2025");
+  assert.strictEqual(preserved.year, "2026");
 });
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -2407,7 +2497,7 @@ test("entriesToBib emits duplicate field names only once after trimming", () => 
   assert.ok(bib.includes("{de Vries}, Lucas"));
 });
 
-test("applyCandidateToEntry preserves protected surname particles over abbreviated candidates", () => {
+test("applyCandidateToEntry keeps the selected candidate core tuple intact", () => {
   const original = {
     ENTRYTYPE: "inproceedings",
     ID: "de2024accelerating",
@@ -2426,8 +2516,8 @@ test("applyCandidateToEntry preserves protected surname particles over abbreviat
     booktitle: "International Conference on Medical Imaging with Deep Learning",
   };
   const applied = lib.applyCandidateToEntry(original, candidate);
-  assert.strictEqual(applied.author, original.author);
-  assert.strictEqual(applied.booktitle, original.booktitle);
+  assert.strictEqual(applied.author, candidate.author);
+  assert.strictEqual(applied.booktitle, candidate.booktitle);
 });
 
 // ═══════════════════════════════════════════════════════════════════════

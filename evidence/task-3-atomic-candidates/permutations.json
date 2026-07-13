@@ -1,0 +1,58 @@
+[
+  {
+    "permutation": 0,
+    "preferPublished": false,
+    "status": "auto_apply",
+    "source": "local_arxiv",
+    "id": "2301.00001",
+    "core": {
+      "title": "Snapshot Atomic Paper",
+      "author": "Author, Alice and Record, Bob",
+      "year": "2023"
+    },
+    "version": "preprint",
+    "reason": "direct_complete_atomic_record"
+  },
+  {
+    "permutation": 0,
+    "preferPublished": true,
+    "status": "auto_apply",
+    "source": "semantic_scholar_match",
+    "id": "ss-published",
+    "core": {
+      "title": "Snapshot Atomic Paper",
+      "author": "Author, Alice and Record, Bob",
+      "year": "2024"
+    },
+    "version": "published",
+    "reason": "direct_complete_atomic_record"
+  },
+  {
+    "permutation": 1,
+    "preferPublished": false,
+    "status": "auto_apply",
+    "source": "local_arxiv",
+    "id": "2301.00001",
+    "core": {
+      "title": "Snapshot Atomic Paper",
+      "author": "Author, Alice and Record, Bob",
+      "year": "2023"
+    },
+    "version": "preprint",
+    "reason": "direct_complete_atomic_record"
+  },
+  {
+    "permutation": 1,
+    "preferPublished": true,
+    "status": "auto_apply",
+    "source": "semantic_scholar_match",
+    "id": "ss-published",
+    "core": {
+      "title": "Snapshot Atomic Paper",
+      "author": "Author, Alice and Record, Bob",
+      "year": "2024"
+    },
+    "version": "published",
+    "reason": "direct_complete_atomic_record"
+  }
+]
