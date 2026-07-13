@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'none'; object-src 'none'; form-action 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://unpkg.com https://huggingface.co https://dblp.org https://openreview.net; connect-src 'self' https://api.crossref.org https://api.semanticscholar.org https://dblp.org https://api.openreview.net https://openreview.net https://export.arxiv.org https://arxiv.org https://huggingface.co https://*.huggingface.co https://*.hf.co https://cas-bridge.xethub.hf.co https://cas-server.xethub.hf.co https://transfer.xethub.hf.co; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; worker-src 'self' blob:; font-src 'self' data:" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'none'; object-src 'none'; form-action 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://huggingface.co; connect-src 'self' https://api.crossref.org https://api.semanticscholar.org https://huggingface.co https://*.huggingface.co https://*.hf.co https://cas-bridge.xethub.hf.co https://cas-server.xethub.hf.co https://transfer.xethub.hf.co; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; worker-src 'self' blob:; font-src 'self' data:" />
   <title>Local Citation Verifier — Local bibliography and citation support QA</title>
   <meta name="description" content="A browser-based citation quality desk for checking BibTeX metadata and judging whether cited manuscript sentences are supported by their referenced papers." />
   <meta name="keywords" content="BibTeX, bibliography checker, verify references, hallucinated citations, LaTeX, CrossRef, Semantic Scholar, DOI, citation checker, academic references, .bib file, Overleaf, BibLaTeX, reference manager, paper verification" />
@@ -341,7 +341,7 @@
     </div>
   </div>
 
-  <script src="https://unpkg.com/fuzzball@2.2.3/dist/fuzzball.umd.min.js"></script>
+  <script src="vendor/fuzzball-2.2.3.umd.min.js?v=2.2.3"></script>
   <script src="lib.js?v=20260712-run-ownership-final"></script>
   <script src="request.js?v=20260712-run-ownership-final"></script>
   <script src="run-controller.js?v=20260712-run-ownership-final"></script>
@@ -352,6 +352,6 @@
   <script src="gemma-reranker.js?v=20260712-provider-failures"></script>
   <script src="vllm-reranker.js?v=20260712-provider-failures"></script>
   <script src="citation-audit.js?v=20260712-provider-failures"></script>
-  <script src="app.js?v=20260712-provider-failures"></script>
+  <script src="app.js?v=20260713-csp-vendor"></script>
 </body>
 </html>

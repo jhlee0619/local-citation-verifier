@@ -53,10 +53,19 @@ class VllmProxyServerTests(unittest.TestCase):
     def test_default_host_is_loopback_only(self) -> None:
         self.assertEqual(DEFAULT_HOST, "127.0.0.1")
 
-    def test_csp_allows_dblp_and_openreview_for_local_metadata(self) -> None:
-        self.assertIn("https://dblp.org", CSP_POLICY)
-        self.assertIn("https://api.openreview.net", CSP_POLICY)
-        self.assertIn("https://openreview.net", CSP_POLICY)
+    def test_csp_keeps_metadata_hosts_out_of_script_sources(self) -> None:
+        directives = {
+            tokens[0]: tokens[1:]
+            for part in CSP_POLICY.split(";")
+            if (tokens := part.split())
+        }
+        script_sources = directives["script-src"]
+        connect_sources = directives["connect-src"]
+        self.assertNotIn("https://dblp.org", script_sources)
+        self.assertNotIn("https://openreview.net", script_sources)
+        self.assertNotIn("https://dblp.org", connect_sources)
+        self.assertNotIn("https://api.openreview.net", connect_sources)
+        self.assertNotIn("https://openreview.net", connect_sources)
 
     def test_csp_allows_huggingface_xet_download_hosts(self) -> None:
         for host in (

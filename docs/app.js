@@ -28,7 +28,7 @@
   const SS_SEARCH = USE_METADATA_PROXY
     ? "/api/semanticscholar/graph/v1/paper/search"
     : "https://api.semanticscholar.org/graph/v1/paper/search";
-  const DBLP_API = USE_METADATA_PROXY ? "/api/dblp/search/publ/api" : "https://dblp.org/search/publ/api";
+  const DBLP_API = USE_METADATA_PROXY ? "/api/dblp/search/publ/api" : "";
   const OPENREVIEW_API = USE_METADATA_PROXY ? "/api/openreview/notes/search" : "";
   const SS_FIELDS = "title,authors,year,venue,publicationVenue,externalIds";
   const LOCAL_ARXIV_BIBTEX = "/api/arxiv/bibtex";
@@ -39,6 +39,23 @@
   const ARXIV_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
   const metadataCache = B.createTtlCache({ ttlMs: METADATA_CACHE_TTL_MS });
   const arxivCache = B.createTtlCache({ ttlMs: ARXIV_CACHE_TTL_MS });
+  const METADATA_PROVIDER_NAMES = Object.freeze([
+    "CrossRef",
+    "Semantic Scholar",
+    ...(DBLP_API ? ["DBLP"] : []),
+    ...(OPENREVIEW_API ? ["OpenReview"] : []),
+  ]);
+
+  function formatProviderNames(conjunction, serialComma = true) {
+    if (METADATA_PROVIDER_NAMES.length < 2) return METADATA_PROVIDER_NAMES[0] || "metadata providers";
+    const last = METADATA_PROVIDER_NAMES[METADATA_PROVIDER_NAMES.length - 1];
+    const leading = METADATA_PROVIDER_NAMES.slice(0, -1);
+    if (leading.length === 1) return `${leading[0]} ${conjunction} ${last}`;
+    return `${leading.join(", ")}${serialComma ? "," : ""} ${conjunction} ${last}`;
+  }
+
+  const METADATA_PROVIDERS_EN = formatProviderNames("and");
+  const METADATA_PROVIDERS_KO = formatProviderNames("및", false);
 
   const EVIDENCE_TEXT = {
     en: {
@@ -46,7 +63,7 @@
       reviewMiddle: "title similarity to",
       reviewAction: "Review the suggestions below and use the checkmark on each row to adopt a value, or keep your original text.",
       localLlmReason: " Local LLM reason: ",
-      notFoundWithTitle: "No matching publication was found in CrossRef, Semantic Scholar, DBLP, or OpenReview for this title. Try fixing typos or adding missing words, then re-run verification, or check the reference manually.",
+      notFoundWithTitle: `No matching publication was found in ${METADATA_PROVIDERS_EN} for this title. Try fixing typos or adding missing words, then re-run verification, or check the reference manually.`,
       notFoundNoTitle: "This entry has no title, so it cannot be looked up automatically. Add a title in your .bib file or verify the entry by hand.",
       lookupFailed: "Publication lookup failed before the databases could answer. This is usually rate limiting or an upstream outage, not evidence that the paper is missing. Re-run verification later.",
     },
@@ -55,7 +72,7 @@
       reviewMiddle: "제목 유사도:",
       reviewAction: "아래 제안을 검토한 뒤 각 행의 값을 채택하거나 원래 값을 유지하세요.",
       localLlmReason: " 로컬 LLM 근거: ",
-      notFoundWithTitle: "CrossRef, Semantic Scholar, DBLP 또는 OpenReview에서 이 제목과 일치하는 출판물을 찾지 못했습니다. 오타나 누락된 단어를 고친 뒤 다시 검증하거나 직접 확인하세요.",
+      notFoundWithTitle: `${METADATA_PROVIDERS_KO}에서 이 제목과 일치하는 출판물을 찾지 못했습니다. 오타나 누락된 단어를 고친 뒤 다시 검증하거나 직접 확인하세요.`,
       notFoundNoTitle: "이 항목에는 title이 없어 자동 조회할 수 없습니다. .bib 파일에 title을 추가하거나 직접 확인하세요.",
       lookupFailed: "데이터베이스가 응답하기 전에 조회가 실패했습니다. 보통 rate limit 또는 upstream 장애이며, 논문이 없다는 뜻은 아닙니다. 잠시 뒤 다시 실행하세요.",
     },
@@ -239,26 +256,11 @@
     ].map(q => String(q || "").trim()).filter(Boolean)));
   }
 
-  function fetchDblpJsonp(params, signal, budget = R.BUDGETS.dblp) {
-    const u = new URL(DBLP_API);
-    for (const [key, value] of Object.entries(params)) u.searchParams.set(key, value);
-    u.searchParams.set("format", "jsonp");
-    return R.jsonp(u.toString(), {
-      signal,
-      timeoutMs: budget.totalTimeoutMs,
-      callbackPrefix: "__dblpCallback",
-      root: window,
-      document,
+  function fetchDblpData(params, run, budget = R.BUDGETS.dblp) {
+    return fetchJSON(DBLP_API, { ...params, format: "json" }, {
+      signal: run?.signal,
+      budget,
     });
-  }
-
-  async function fetchDblpData(params, run, budget = R.BUDGETS.dblp) {
-    if (USE_METADATA_PROXY)
-      return fetchJSON(DBLP_API, { ...params, format: "json" }, {
-        signal: run?.signal,
-        budget,
-      });
-    return fetchDblpJsonp(params, run?.signal, budget);
   }
 
   async function searchDblp(title, original, run) {
@@ -400,8 +402,9 @@
       { source: "semantic_scholar_match", run: () => searchSSMatch(title, run) },
       { source: "crossref_search", run: () => searchCrossref(title, run) },
       { source: "semantic_scholar_search", run: () => searchSSSearch(title, run) },
-      { source: "dblp", run: () => searchDblp(title, original, run) },
     ];
+    if (DBLP_API)
+      searches.push({ source: "dblp", run: () => searchDblp(title, original, run) });
     if (OPENREVIEW_API)
       searches.push({ source: "openreview", run: () => searchOpenReview(title, original, run) });
     const settled = await Promise.allSettled(searches.map(search => search.run()));
@@ -2549,7 +2552,7 @@
   const introOnboardingSteps = [
     {
       title: "Welcome",
-      body: "Local Citation Verifier checks each entry against CrossRef, Semantic Scholar, DBLP, and OpenReview — wrong metadata, missing DOIs, duplicates, and citations that don’t exist online (including AI hallucinations). Your file stays in the browser.",
+      body: `Local Citation Verifier checks each entry against ${METADATA_PROVIDERS_EN} — wrong metadata, missing DOIs, duplicates, and citations that don’t exist online (including AI hallucinations). Your file stays in the browser.`,
       target: null,
     },
     {
@@ -2569,7 +2572,7 @@
     },
     {
       title: "Run verification",
-      body: "Click <strong>Verify pasted BibTeX</strong> when you’re ready. The app queries CrossRef, Semantic Scholar, DBLP, and OpenReview (a short wait per entry). <strong>When it finishes, the tour continues</strong> and walks through both sample results — updated vs not found — plus settings.",
+      body: `Click <strong>Verify pasted BibTeX</strong> when you’re ready. The app queries ${METADATA_PROVIDERS_EN} (a short wait per entry). <strong>When it finishes, the tour continues</strong> and walks through both sample results — updated vs not found — plus settings.`,
       target: "#btn-verify-paste",
     },
     {
@@ -2745,7 +2748,7 @@
       },
       {
         title: "First entry — metadata updated",
-        body: "This row matched a real paper. The sample used a <strong>wrong journal</strong> on purpose — suggested venue, DOI, and other fields come from CrossRef / Semantic Scholar / DBLP / OpenReview. Each line compares your text to the suggestion; accept or revert per field.",
+        body: `This row matched a real paper. The sample used a <strong>wrong journal</strong> on purpose — suggested venue, DOI, and other fields come from ${METADATA_PROVIDERS_EN}. Each line compares your text to the suggestion; accept or revert per field.`,
         target: ".entry-list .entry-card:nth-child(1)",
         panelTop: true,
       },

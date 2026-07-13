@@ -29,7 +29,13 @@ assert.ok(app.includes("const preferPublished = run.settings.preferPublished"));
 assert.ok(app.includes("runController.startVerification({"));
 assert.ok(app.includes("const sleep = (ms, signal) => R.sleep(ms, { signal })"));
 assert.ok(app.includes("await runController.settleOwned(run, sleep(500, run.signal))"));
-assert.ok(app.includes("return R.jsonp(u.toString(), {"));
+assert.ok(app.includes('const DBLP_API = USE_METADATA_PROXY ? "/api/dblp/search/publ/api" : ""'));
+assert.ok(!app.includes("R.jsonp("), "production metadata lookup must not inject remote scripts");
+assert.ok(app.includes("if (DBLP_API)\n      searches.push({ source: \"dblp\""));
+assert.ok(app.includes('...(DBLP_API ? ["DBLP"] : [])'));
+assert.ok(app.includes('...(OPENREVIEW_API ? ["OpenReview"] : [])'));
+assert.ok(app.includes('const METADATA_PROVIDERS_EN = formatProviderNames("and")'));
+assert.ok(!app.includes("CrossRef, Semantic Scholar, DBLP, and OpenReview"));
 assert.ok(app.includes("signal: run?.signal"));
 assert.doesNotMatch(app, /activeRun\.completed\s*\?\s*activeRun\.settings/);
 assert.match(app, /setTimeout\(\(\) => \{\s*if \(!isRunActive\(run\)\) return;\s*openOnboardingPostVerifyTour\(\);\s*\}, 450\)/);
@@ -80,8 +86,9 @@ const appIndex = html.indexOf("app.js?v=");
 assert.ok(libIndex >= 0 && runControllerIndex > libIndex && atomicIndex > runControllerIndex && providerIndex > atomicIndex && decisionIndex > providerIndex && appIndex > decisionIndex);
 for (const script of ["lib.js", "request.js", "run-controller.js"])
   assert.ok(html.includes(`${script}?v=20260712-run-ownership-final`), `stale run-ownership asset version: ${script}`);
-for (const script of ["webgpu-engine.js", "provider-runtime.js", "gemma-reranker.js", "vllm-reranker.js", "citation-audit.js", "app.js"])
+for (const script of ["webgpu-engine.js", "provider-runtime.js", "gemma-reranker.js", "vllm-reranker.js", "citation-audit.js"])
   assert.ok(html.includes(`${script}?v=20260712-provider-failures`), `stale provider-failure asset version: ${script}`);
+assert.ok(html.includes("app.js?v=20260713-csp-vendor"), "stale app asset version after DBLP transport change");
 assert.match(html, /<option value="0" selected>All<\/option>/);
 assert.doesNotMatch(html, /<option value="10" selected>/);
 

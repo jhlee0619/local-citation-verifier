@@ -4,11 +4,11 @@
   "type": "commonjs",
   "scripts": {
     "check:syntax": "node --check docs/lib.js && node --check docs/request.js && node --check docs/run-controller.js && node --check docs/webgpu-engine.js && node --check docs/atomic-candidates.js && node --check docs/provider-runtime.js && node --check docs/decision-policy.js && node --check docs/app.js && node --check docs/gemma-reranker.js && node --check docs/vllm-reranker.js && node --check docs/citation-audit.js",
-    "test:node": "node tests/test_lib.js && node tests/test_request.js && node tests/test_run_controller.js && node tests/test_provider_runtime.js && node tests/test_gemma_reranker.js && node tests/test_atomic_candidates.js && node tests/test_atomic_app_contract.js && node tests/test_decision_policy.js && node tests/test_speed_primitives.js && node tests/test_vllm_reranker.js && node tests/test_citation_audit.js && node tests/test_fixture_harness.js && node tests/test_fixture_snapshot.js",
+    "test:node": "node tests/test_lib.js && node tests/test_request.js && node tests/test_run_controller.js && node tests/test_provider_runtime.js && node tests/test_gemma_reranker.js && node tests/test_atomic_candidates.js && node tests/test_atomic_app_contract.js && node tests/test_decision_policy.js && node tests/test_speed_primitives.js && node tests/test_vllm_reranker.js && node tests/test_citation_audit.js && node tests/test_fixture_harness.js && node tests/test_fixture_snapshot.js && node tests/test_security_contract.js",
     "test:python": "python -m py_compile server/vllm_proxy_server.py && python -m unittest discover -s tests -p \"test_*.py\"",
     "test": "npm run check:syntax && npm run test:node && npm run test:python"
   },
   "devDependencies": {
-    "fuzzball": "^2.2.3"
+    "fuzzball": "2.2.3"
   }
 }
