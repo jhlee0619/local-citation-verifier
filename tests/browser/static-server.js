@@ -7,7 +7,7 @@ const path = require("path");
 
 const host = "127.0.0.1";
 const port = Number(process.env.BROWSER_TEST_PORT || 4173);
-const root = path.resolve(__dirname, "../../docs");
+const root = path.resolve(process.env.BROWSER_TEST_ROOT || path.resolve(__dirname, "../../docs"));
 const sockets = new Set();
 
 const contentTypes = Object.freeze({
@@ -44,6 +44,10 @@ function resolveAsset(pathname) {
 const server = http.createServer((request, response) => {
   const url = new URL(request.url || "/", `http://${host}:${port}`);
   if (url.pathname.startsWith("/__hang/")) return;
+  if (url.pathname === "/api/rerank/vllm/health") {
+    send(response, 200, JSON.stringify({ ready: false }), "application/json; charset=utf-8");
+    return;
+  }
   if (request.method !== "GET" && request.method !== "HEAD") {
     send(response, 405, "Method Not Allowed");
     return;

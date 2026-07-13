@@ -29,6 +29,15 @@ const FAIL = Object.freeze({
 });
 const HANG = Object.freeze({ kind: "hang" });
 
+async function verifyBibWithClock(page, bib) {
+  await startVerification(page, bib);
+  for (let elapsed = 0; elapsed < 10_000; elapsed += 500) {
+    await page.clock.runFor(500);
+    await page.evaluate(() => Promise.resolve());
+  }
+  await waitForDone(page, { clock: true });
+}
+
 test("a late superseded response cannot overwrite the current run", async ({ page, baseURL }) => {
   const state = await preparePage(page, baseURL, {}, {
     initScript: () => {
@@ -82,8 +91,8 @@ test("distinguishes all-failed lookup from a partial provider success", async ({
     crossrefSearch: FAIL,
     dblp: FAIL,
     openreview: FAIL,
-  });
-  await verifyBib(failedPage, BIB("All Providers Failed"));
+  }, { clock: true });
+  await verifyBibWithClock(failedPage, BIB("All Providers Failed"));
   await expect(failedPage.locator('.entry-card[data-index="0"] .status-tag')).toHaveText("Lookup Failed");
   await expect(failedPage.locator('.entry-card[data-index="0"]')).toHaveAttribute("data-status", "needs_review");
   expectCleanNetwork(failedState);
@@ -101,8 +110,8 @@ test("distinguishes all-failed lookup from a partial provider success", async ({
     crossrefSearch: FAIL,
     dblp: FAIL,
     openreview: FAIL,
-  });
-  await verifyBib(partialPage, BIB("Partial Provider Success"));
+  }, { clock: true });
+  await verifyBibWithClock(partialPage, BIB("Partial Provider Success"));
   await expect(partialPage.locator('.entry-card[data-index="0"] .status-tag')).toHaveText("Needs Review");
   await expect(partialPage.locator('.entry-card[data-index="0"] .source-warning')).toBeVisible();
   expectCleanNetwork(partialState);

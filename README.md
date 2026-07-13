@@ -136,20 +136,37 @@ Network activity is limited to:
 
 ## Development
 
-Run the lightweight checks:
+Install the locked dependencies and run every non-browser check:
 
 ```bash
-node -c docs/lib.js
-node -c docs/gemma-reranker.js
-node -c docs/vllm-reranker.js
-node -c docs/citation-audit.js
-node -c docs/app.js
-node tests/test_lib.js
-node tests/test_vllm_reranker.js
-node tests/test_citation_audit.js
-python3 -m py_compile server/vllm_proxy_server.py
-python3 tests/test_vllm_proxy.py
+npm ci
+npm test
 ```
+
+Run the deterministic Chromium suite separately:
+
+```bash
+npx playwright install chromium
+npm run test:browser
+```
+
+The browser gate stubs all providers and proves downloaded BibTeX bytes, original-by-default review decisions, atomic title/author/year provenance, provider failure states, cancellation, deadlines, and WebGPU quarantine without using live APIs.
+
+For an optional live-network observation run, start the static app or local proxy at `http://127.0.0.1:8088/`, then run:
+
+```bash
+node tests/manual/browser_live_run.js
+```
+
+Set `APP_URL` or pass a BibTeX fixture path when needed. This is a manual diagnostic rather than a release gate and has a six-minute polling budget because public providers may be slow or unavailable.
+
+## Release operations
+
+CI and GitHub Pages deployment call the same reusable quality workflow. Deployment packages one SHA-named artifact after all tests pass, verifies its canonical file manifest after download, and deploys those exact bytes. The production smoke then verifies published hashes and initial browser behavior without submitting bibliography data to providers.
+
+Rollback uses the manual deploy workflow with a full 40-character lowercase commit SHA from `main`; it re-runs the complete gate before deployment. See [`docs/operations.md`](docs/operations.md) for the operator procedure and recovery criteria.
+
+Before the first workflow release, GitHub Pages must use **GitHub Actions** as its publishing source; legacy `main:/docs` publishing must be disabled. The deploy preflight fails closed until the Pages API reports `build_type: workflow`.
 
 ## Attribution
 

@@ -2,37 +2,18 @@ name: CI
 
 on:
   push:
-    branches: [main, gh-pages]
+    branches: [main]
   pull_request:
-    branches: [main, gh-pages]
+    branches: [main]
+
+permissions:
+  contents: read
 
 jobs:
-  test:
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        node-version: [18, 20, 22]
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Use Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ matrix.node-version }}
-
-      - name: Use Python 3.12
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Syntax check
-        run: npm run check:syntax
-
-      - name: Run JavaScript tests
-        run: npm run test:node
-
-      - name: Run Python proxy tests
-        run: npm run test:python
+  quality:
+    uses: ./.github/workflows/quality.yml
+    with:
+      source_sha: ${{ github.sha }}
+      produce_pages_artifact: false
+    permissions:
+      contents: read

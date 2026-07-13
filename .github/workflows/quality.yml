@@ -1,0 +1,244 @@
+name: Reusable quality gate
+
+on:
+  workflow_call:
+    inputs:
+      source_sha:
+        description: Full commit SHA whose source is tested and packaged
+        required: true
+        type: string
+      produce_pages_artifact:
+        description: Package a Pages artifact only after every quality job passes
+        required: false
+        default: false
+        type: boolean
+    outputs:
+      source_sha:
+        description: Verified source commit
+        value: ${{ jobs.preflight.outputs.source_sha }}
+      docs_tree_id:
+        description: Git tree ID for the deployed docs directory
+        value: ${{ jobs.preflight.outputs.docs_tree_id }}
+      manifest_digest:
+        description: SHA-256 of the canonical release manifest
+        value: ${{ jobs.package_pages.outputs.manifest_digest }}
+      pages_artifact_name:
+        description: Immutable Pages artifact name
+        value: ${{ jobs.package_pages.outputs.pages_artifact_name }}
+      pages_artifact_id:
+        description: Immutable Pages artifact ID
+        value: ${{ jobs.package_pages.outputs.pages_artifact_id }}
+      control_artifact_name:
+        description: Release verification tools and expected manifest
+        value: ${{ jobs.package_pages.outputs.control_artifact_name }}
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    outputs:
+      source_sha: ${{ steps.identity.outputs.source_sha }}
+      docs_tree_id: ${{ steps.identity.outputs.docs_tree_id }}
+    steps:
+      - name: Check out exact source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ inputs.source_sha }}
+          fetch-depth: 0
+          path: source
+          persist-credentials: false
+
+      - name: Verify source identity and tree shape
+        id: identity
+        working-directory: source
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "source_sha must be a full lowercase commit SHA" >&2; exit 1; }
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          docs_tree_id="$(git rev-parse "$SOURCE_SHA:docs")"
+          if git ls-tree -r "$SOURCE_SHA" docs | awk '$1 == "120000" { found=1 } END { exit !found }'; then
+            echo "docs must not contain symbolic links" >&2
+            exit 1
+          fi
+          echo "source_sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+          echo "docs_tree_id=$docs_tree_id" >> "$GITHUB_OUTPUT"
+
+  node:
+    needs: preflight
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [18, 20, 22]
+    steps:
+      - name: Check out exact source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ needs.preflight.outputs.source_sha }}
+          path: source
+          persist-credentials: false
+
+      - name: Use Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+          cache-dependency-path: source/package-lock.json
+
+      - name: Install locked dependencies
+        working-directory: source
+        run: npm ci
+
+      - name: Run syntax checks
+        working-directory: source
+        run: npm run check:syntax
+
+      - name: Run Node unit and contract tests
+        working-directory: source
+        run: npm run test:node
+
+  python:
+    needs: preflight
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out exact source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ needs.preflight.outputs.source_sha }}
+          path: source
+          persist-credentials: false
+
+      - name: Use Python 3.12
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.12"
+
+      - name: Run Python proxy tests
+        working-directory: source
+        run: python -m py_compile server/vllm_proxy_server.py && python -m unittest discover -s tests -p "test_*.py"
+
+  browser:
+    needs: preflight
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out exact source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ needs.preflight.outputs.source_sha }}
+          path: source
+          persist-credentials: false
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: source/package-lock.json
+
+      - name: Install locked dependencies
+        working-directory: source
+        run: npm ci
+
+      - name: Install the locked Chromium runtime
+        working-directory: source
+        run: npx playwright install --with-deps chromium
+
+      - name: Run deterministic browser gate
+        working-directory: source
+        run: npm run test:browser
+
+      - name: Preserve browser failure evidence
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: browser-failure-${{ inputs.source_sha }}
+          path: |
+            source/playwright-report
+            source/test-results
+          if-no-files-found: warn
+          retention-days: 7
+
+  package_pages:
+    if: inputs.produce_pages_artifact
+    needs: [preflight, node, python, browser]
+    runs-on: ubuntu-latest
+    outputs:
+      manifest_digest: ${{ steps.release.outputs.manifest_digest }}
+      pages_artifact_name: ${{ steps.names.outputs.pages_artifact_name }}
+      pages_artifact_id: ${{ steps.pages.outputs.artifact-id }}
+      control_artifact_name: ${{ steps.names.outputs.control_artifact_name }}
+    steps:
+      - name: Check out exact source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ needs.preflight.outputs.source_sha }}
+          path: source
+          persist-credentials: false
+
+      - name: Check out current release controls
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ github.sha }}
+          path: control
+          persist-credentials: false
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+
+      - name: Name immutable artifacts
+        id: names
+        env:
+          SOURCE_SHA: ${{ needs.preflight.outputs.source_sha }}
+        run: |
+          echo "pages_artifact_name=github-pages-$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+          echo "control_artifact_name=release-control-$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Reject links and create canonical release manifest
+        id: release
+        env:
+          SOURCE_SHA: ${{ needs.preflight.outputs.source_sha }}
+          DOCS_TREE_ID: ${{ needs.preflight.outputs.docs_tree_id }}
+        run: |
+          set -euo pipefail
+          test -z "$(find source/docs -type l -print -quit)" || { echo "docs contains a symbolic link" >&2; exit 1; }
+          node control/scripts/release-manifest.js create \
+            --source source/docs --site _site \
+            --source-sha "$SOURCE_SHA" --docs-tree-id "$DOCS_TREE_ID"
+          node control/scripts/release-manifest.js verify \
+            --site _site --source-sha "$SOURCE_SHA" --docs-tree-id "$DOCS_TREE_ID"
+          echo "manifest_digest=$(tr -d '\n' < _site/_release/manifest.sha256)" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare release verification controls
+        run: |
+          mkdir release-control
+          cp control/scripts/release-manifest.js release-control/
+          cp control/scripts/post-deploy-smoke.js release-control/
+          cp control/package.json control/package-lock.json release-control/
+          cp _site/_release/manifest.json _site/_release/manifest.sha256 release-control/
+
+      - name: Create the Pages archive
+        run: tar --directory _site -cvf "$RUNNER_TEMP/artifact.tar" .
+
+      - name: Upload immutable Pages artifact
+        id: pages
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ${{ steps.names.outputs.pages_artifact_name }}
+          path: ${{ runner.temp }}/artifact.tar
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload release verification controls
+        id: controls
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ${{ steps.names.outputs.control_artifact_name }}
+          path: release-control
+          if-no-files-found: error
+          retention-days: 7

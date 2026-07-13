@@ -2479,7 +2479,9 @@
     localStorage.setItem(SPEED_MODE_STORAGE, getSpeedMode());
   });
   syncWebGpuConsent();
-  detectVllmServer();
+  if (USE_METADATA_PROXY) {
+    detectVllmServer();
+  }
   optMaxAuthors.addEventListener("change", () => {
     updateAuthorPills();
     updatePreview();
