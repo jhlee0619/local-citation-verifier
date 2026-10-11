@@ -7,19 +7,20 @@
  * classification. DOM-free (reads window.location only to pick endpoints and
  * request origins).
  */
-import * as Net from "./net.js?v=20261012-s17";
-import { parseBib } from "./bibtex.js?v=20261012-s17";
-import * as PubMed from "./pubmed.js?v=20261012-s17";
+import * as Net from "./net.js?v=20261012-s18";
+import { parseBib } from "./bibtex.js?v=20261012-s18";
+import * as PubMed from "./pubmed.js?v=20261012-s18";
+import * as Pages from "./pages.js?v=20261012-s18";
 import {
   arxivIdInText, arxivYearFromId, authorNames, entryDoi, entryPmcid, entryPmid, entryVenue, expandVenue, extractArxivId,
   extractOpenReviewForumId, firstAuthorSearchToken, foldText, htmlToText, isPreprintVenue, isSeriesVenue, MIN_TITLE_SIM,
   normalizeArxivId, normalizeDoi, parseYear, queryTitleKey, safeExternalUrl, searchTitleTokens, stripLatex,
   titleKey, titleSimilarity,
-} from "./text.js?v=20261012-s17";
+} from "./text.js?v=20261012-s18";
 import {
   createRecord, dedupeRecords, directLinkKinds, identifierStates, INFO_NOTICE_TYPES,
   isCleanPublishedManifestation, mergeNotices, noticeType, recordNoticeClass, sameWork, SERIOUS_NOTICE_TYPES,
-} from "./records.js?v=20261012-s17";
+} from "./records.js?v=20261012-s18";
 
   // ─── Endpoints ─────────────────────────────────────────────────────
   // Every origin except GitHub Pages and file:// expects the local metadata
@@ -67,6 +68,8 @@ import {
       OPENREVIEW_API: proxy ? "/api/openreview/notes/search" : "",
       SS_FIELDS,
       LOCAL_ARXIV_BIBTEX: proxy ? "/api/arxiv/bibtex" : "",
+      // The official proceedings page an entry's url names (pages.js).
+      PROCEEDINGS_PAGE: proxy ? "/api/page" : "",
       HEALTH: proxy ? "/api/health" : "",
       PUBMED_API: PubMed.EUTILS,
       DATACITE_API,
@@ -134,11 +137,12 @@ import {
   const CROSSREF_QUERY_AUTHORS = 3;
   const CROSSREF_ROWS = 5;
   // Fields every Crossref list query returns (the brief's set plus publisher,
-  // which the records keep, and created, the last year fallback). The
+  // which the records keep, created, the last year fallback, and subtitle,
+  // the part of a title after its colon that Crossref may keep apart). The
   // /works/{doi} route rejects select (HTTP 400 "This route does not
   // support select", live 2026-10-10) and always returns the full record.
   const CROSSREF_SELECT = "DOI,title,author,issued,published-print,published-online,created,container-title," +
-    "type,score,updated-by,update-to,volume,issue,page,URL,publisher";
+    "type,score,updated-by,update-to,volume,issue,page,URL,publisher,subtitle";
 
   function crossrefQueryText(value) {
     return foldText(value).replace(/[^\p{L}\p{N}]+/gu, " ").trim();
@@ -271,19 +275,38 @@ import {
   }
 
   // ─── Record converters ─────────────────────────────────────────────
+  // Crossref may keep a title's subtitle apart (title ["BOLD"], subtitle
+  // ["Dataset and Metrics for …"]): the whole title joins them with a
+  // colon, unless the title already holds the subtitle.
+  function crossrefTitle(item) {
+    const title = htmlToText((item.title || [""])[0]);
+    const subtitle = htmlToText((item.subtitle || [""])[0]);
+    const fold = text => foldText(text).replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+    if (!subtitle || !title || fold(title).includes(fold(subtitle))) return title;
+    return `${title.replace(/[\s:;.,-]+$/, "")}: ${subtitle}`;
+  }
+
+  // A degree Crossref recorded as the family name ({ family: "Md", given:
+  // "Arne Edward Michalson" }): the family name is the given name's last word.
+  const DEGREE_NAME = /^(?:md|m\.d\.|phd|ph\.d\.|msc|mph|mba|mbbs|dds|dmd|rn|frcp|frcs|facs)$/i;
+
+  function crossrefAuthor(author) {
+    let family = htmlToText(author.family), given = htmlToText(author.given);
+    const words = given.split(/\s+/).filter(Boolean);
+    if (DEGREE_NAME.test(family) && words.length > 1) [family, given] = [words.pop(), words.join(" ")];
+    return family ? `${family}, ${given}`.replace(/, $/, "") : "";
+  }
+
   // Crossref text may carry HTML/JATS/MathML markup and entities (htmlToText).
   // DOIs are lower-cased (Crossref's search already answers in lower case).
   // Notices go to _notices, a notice record's targets to _updates and its
   // type to _noticeType (records.recordNoticeClass: never the same work).
   function crossrefToStandard(item) {
-    const authors = (item.author || []).map(a => {
-      const f = htmlToText(a.family), g = htmlToText(a.given);
-      return f ? `${f}, ${g}`.replace(/, $/, "") : "";
-    }).filter(Boolean);
+    const authors = (item.author || []).map(crossrefAuthor).filter(Boolean);
 
     const container = (item["container-title"] || []).map(htmlToText);
     const updates = crossrefNotices(item);
-    const { title, notices } = unstampedTitle(htmlToText((item.title || [""])[0]), updates.notices);
+    const { title, notices } = unstampedTitle(crossrefTitle(item), updates.notices);
 
     const out = {
       title,
@@ -592,6 +615,7 @@ import {
     dblp: "DBLP",
     openreview: "OpenReview",
     local_arxiv: "arXiv enrichment",
+    proceedings: "The proceedings page",
     dblp_key: "DBLP",
     vllm: "local vLLM",
     citation_evidence: "citation evidence",
@@ -671,12 +695,12 @@ import {
   // request of theirs), by provider key.
   const PROVIDER_NAMES = Object.freeze({
     crossref: "Crossref", pubmed: "PubMed", datacite: "DataCite", dblp: "DBLP", openreview: "OpenReview",
-    arxiv: "arXiv", semantic_scholar: "Semantic Scholar",
+    arxiv: "arXiv", semantic_scholar: "Semantic Scholar", proceedings: "Proceedings page",
   });
   const OUTCOME_PROVIDER = Object.freeze({
     crossref_search: "crossref", crossref_doi: "crossref", pubmed: "pubmed", datacite: "datacite", dblp: "dblp",
     dblp_key: "dblp", openreview: "openreview", local_arxiv: "arxiv", semantic_scholar_match: "semantic_scholar",
-    semantic_scholar_search: "semantic_scholar",
+    semantic_scholar_search: "semantic_scholar", proceedings: "proceedings",
   });
 
   function providerStates(outcomes) {
@@ -1306,6 +1330,23 @@ import {
       };
     }
 
+    // The publisher's record on the official proceedings page the entry's
+    // url names (pages.js: NeurIPS, PMLR, JMLR, ACL Anthology, CVF, IJCAI),
+    // through the proxy only; undefined when no such page applies.
+    async function fetchProceedingsPage(original, run) {
+      const page = Pages.entryPage(original);
+      if (!page || !endpoints.PROCEEDINGS_PAGE) return undefined;
+      const data = await metadataCache.getOrSet(metadataCacheKey("page", page.key), () =>
+        Net.requestJson(endpoints.PROCEEDINGS_PAGE, { url: page.url }, {
+          requestApi: Net,
+          budget: Net.BUDGETS.arxiv,
+          signal: run?.signal,
+          origin: window.location.origin,
+        }), cacheOptions(run));
+      const standard = typeof data?.meta === "string" ? Pages.pageRecord(page, Pages.citationMeta(data.meta)) : null;
+      return standard ? providerRecord(standard, "proceedings", page.key, "url") : null;
+    }
+
     function relevantProviderCandidates(original, candidates) {
       return relevantCandidates(original, candidates, {
         directLinkKinds,
@@ -1327,10 +1368,17 @@ import {
       if (endpoints.OPENREVIEW_API)
         searches.push({ source: "openreview", run: () => searchOpenReview(title, original, run) });
       searches.push({ source: "pubmed", run: () => searchPubMed(title, original, run) });
+      // The proceedings page is asked next to the searches; it only adds a
+      // record, so its failure is a warning, never a lookup failure.
+      const pageLookup = fetchProceedingsPage(original, run).then(
+        record => ({ record, state: "success" }), error => ({ record: null, state: "failure", error }));
       const settled = await Promise.allSettled(searches.map(search => search.run()));
       const outcomes = settled.map((result, index) => result.status === "fulfilled"
         ? { source: searches[index].source, role: "primary", state: "success" }
         : { source: searches[index].source, role: "primary", state: "failure", error: result.reason });
+      const page = await pageLookup;
+      if (page.record !== undefined) outcomes.push({ source: "proceedings", role: "enrichment", state: page.state, error: page.error });
+      if (page.record) rawCandidates.push(page.record);
       settled.forEach(result => {
         if (result.status !== "fulfilled" || !result.value) return;
         if (Array.isArray(result.value)) rawCandidates.push(...result.value);
@@ -1358,25 +1406,34 @@ import {
 
       const classification = classifyAbsence(outcomes, candidates);
       const warnings = sourceWarnings(outcomes);
+      const providers = providerStates(outcomes);
+      // Failed providers that served a bot challenge: asking again soon gets
+      // the same page, so a retry has to wait (main.js).
+      const challenged = new Set(failureOutcomes(outcomes).filter(outcome => outcome.error?.challenge)
+        .map(outcome => OUTCOME_PROVIDER[outcome.source]));
       if (classification === "lookup_failed") {
+        const failed = Object.keys(providers).filter(key => providers[key] === "failed");
         const error = new Error("one or more primary metadata providers were unavailable");
         error.name = "LookupFailedError";
         error.sourceWarnings = warnings;
         error.outcomes = outcomes;
+        error.unavailableProviders = failed.map(key => PROVIDER_NAMES[key]);
+        error.blockedProviders = failed.filter(key => challenged.has(key)).map(key => PROVIDER_NAMES[key]);
         throw error;
       }
 
       // Which providers answered; the applicable authoritative ones that
       // failed make a verdict that rests on absence a lookup failure
       // (verify.decide: provider_unavailable).
-      const providers = providerStates(outcomes);
       const identifierResolved = identifierStates(original, candidates, checks.identifiers)
         .some(item => item.kind === "doi" && item.state === "confirmed");
-      const unavailableProviders = applicableProviders(original, endpoints, { identifierResolved })
-        .filter(key => providers[key] === "failed").map(key => PROVIDER_NAMES[key]);
+      const unavailable = applicableProviders(original, endpoints, { identifierResolved })
+        .filter(key => providers[key] === "failed");
       return {
         candidates, classification, sourceWarnings: warnings, outcomes, doiRecords: doiEnrichment.byDoi, noticesByDoi,
-        identifiers: checks.identifiers, providers, unavailableProviders,
+        identifiers: checks.identifiers, providers,
+        unavailableProviders: unavailable.map(key => PROVIDER_NAMES[key]),
+        blockedProviders: unavailable.filter(key => challenged.has(key)).map(key => PROVIDER_NAMES[key]),
       };
     }
 

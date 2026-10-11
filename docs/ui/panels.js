@@ -4,12 +4,12 @@
  * rerank engine) and the results toolbar (summary badges, filters, search
  * and hotkeys).
  */
-import { $, $$ } from "./dom.js?v=20261012-s17";
-import { normalizeEvidenceLanguage } from "../core/text.js?v=20261012-s17";
-import { ON_GITHUB_PAGES, USE_METADATA_PROXY } from "../core/providers.js?v=20261012-s17";
-import * as Judge from "../core/judge.js?v=20261012-s17";
-import { summaryStatus } from "../core/output.js?v=20261012-s17";
-import { verificationConcurrency } from "../core/verify.js?v=20261012-s17";
+import { $, $$ } from "./dom.js?v=20261012-s18";
+import { normalizeEvidenceLanguage } from "../core/text.js?v=20261012-s18";
+import { ON_GITHUB_PAGES, USE_METADATA_PROXY } from "../core/providers.js?v=20261012-s18";
+import * as Judge from "../core/judge.js?v=20261012-s18";
+import { summaryStatus } from "../core/output.js?v=20261012-s18";
+import { verificationConcurrency } from "../core/verify.js?v=20261012-s18";
 
   // ─── Storage ───────────────────────────────────────────────────────
   // Every storage access goes through here. A browser that blocks storage

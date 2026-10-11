@@ -23,25 +23,27 @@ Verifies `.bib`, `.ris` and `.nbib` files (RIS and MEDLINE are converted to BibT
 
 | Block code | Meaning | What to do |
 | --- | --- | --- |
-| `updated` | Auto-Updated: an authoritative record corrects or completes the entry | `lcv fix <file> --in-place`, then check again |
-| `needs_review` | every review reason (`wrong_authors`, `wrong_year`, `id_title_mismatch`, `id_conflict`, `doi_unconfirmed`, `arxiv_unconfirmed`, `pmid_unconfirmed`, `unconfirmed_source`, `integrity`, `core_change_without_id`, `core_conflict`, `identifier_record_changes_type_or_venue`, `doi_round_trip_failed`, …) | replace the entry with the whole record (`lcv resolve … --bibtex`), fix the identifier or the entry's own fields, or delete it. `lcv fix` never removes an identifier by itself |
+| `updated` | Auto-Updated: the record the entry's own DOI or arXiv ID names corrects it | `lcv fix <file> --in-place`, then check again |
+| `needs_review` | every review reason (`wrong_authors`, `wrong_year`, `id_title_mismatch`, `id_conflict`, `doi_unconfirmed`, `arxiv_unconfirmed`, `pmid_unconfirmed`, `unconfirmed_source`, `integrity`, `core_change_without_id`, `core_conflict`, `identifier_record_changes_type_or_venue`, …) | replace the entry with the whole record (`lcv resolve … --bibtex`), fix the identifier or the entry's own fields, or delete it. `lcv fix` never removes an identifier by itself |
 | `not_found` | no database lists the work | replace it with a record from `lcv resolve`, delete it, or have a human approve it (books, reports, guidelines) |
-| `lookup_failed` | the databases did not answer, an identifier lookup failed (`identifier_lookup_failed`), or a database the verdict depends on did not answer (`provider_unavailable`, listed in `unavailable_providers`: never evidence against the entry) | rerun later; do not change the entry because of it |
+| `lookup_failed` | the databases did not answer, an identifier lookup failed (`identifier_lookup_failed`), or a database the verdict depends on did not answer (`provider_unavailable`, listed in `unavailable_providers`: never evidence against the entry; `blocked_providers` lists those that answered with a bot check, such as DBLP's) | rerun later (a blocking database gives the same answer for a while); do not change the entry because of it |
 | `invalid` | the entry could not be parsed | fix the BibTeX syntax |
 | `serious_notice` | retraction, partial retraction, withdrawal, removal or expression of concern | remove the citation, or a human approves citing it |
 | `stale_approval` | the entry changed after its approval | restore it, or a human approves it again |
+
+A Verified entry is never changed: fields an authoritative record would add (a DOI, pages, a publisher) are listed as `suggested_fields` (text output with `-v`: `could add …`), for you to take with `lcv resolve` if you want them.
 
 Text output prints one line per blocking entry, `KEY — STATUS (reasons) — what to do — record`, then the totals. Without `--strict` the same entries are listed as "would block", and the command only reports.
 
 ### `lcv fix <file.bib> [-o <out> | -o - | --in-place] [--allow <path>]`
 
-Verifies the file and applies **only** the system auto-updates (the record the entry's own DOI or arXiv ID names, or the additive-only update that fills missing fields). It never applies a review candidate. The file is written through the app's span-preserving writer: every other entry, `@string`, `@comment` and free text keeps its bytes. Without `-o` or `--in-place` it is a dry run. `-o -` writes the BibTeX to stdout and the report to stderr. The report lists what changed and what still needs a human or agent decision; the exit code is the one `check --strict` would give after the fix.
+Verifies the file and applies **only** the system auto-updates (the record the entry's own DOI or arXiv ID names). Verified entries are never changed. It never applies a review candidate. The file is written through the app's span-preserving writer: every other entry, `@string`, `@comment` and free text keeps its bytes. Without `-o` or `--in-place` it is a dry run. `-o -` writes the BibTeX to stdout and the report to stderr. The report lists what changed and what still needs a human or agent decision; the exit code is the one `check --strict` would give after the fix.
 
 ### `lcv resolve [<free text>] [--doi X] [--pmid X] [--pmcid X] [--arxiv X] [--title T --author A --year Y] [--pick N] [--bibtex] [--key K]`
 
 Looks a work up with the verifier's providers: the records its identifiers name (Crossref by DOI, PubMed by PMID/PMCID, arXiv by ID), then the full provider search seeded with the title (or with the identifier's record). Free text may be a whole reference string; identifiers are read with the core extractors, and title, authors and year with simple heuristics (a quoted title, APA `(year). Title.`, Vancouver and IEEE author lists). Explicit options override the free text.
 
-Only authoritative records are listed (Crossref, PubMed, arXiv, DBLP, OpenReview), best first, each with how it matches: `identifier` (named by the query's DOI/PMID/PMCID/arXiv ID), `same_work` (title, first author and compatible year), `title` (the same title when no author was given) or `weak` (a similar title, not confirmed). Semantic Scholar hits are listed apart as *discovery only — not usable as a reference*.
+Only authoritative records are listed (Crossref, PubMed, arXiv, DBLP, OpenReview, official proceedings pages), best first, each with how it matches: `identifier` (named by the query's DOI/PMID/PMCID/arXiv ID), `same_work` (title, first author and compatible year), `title` (the same title when no author was given) or `weak` (a similar title, not confirmed). Semantic Scholar hits are listed apart as *discovery only — not usable as a reference*.
 
 `--bibtex` prints one record as BibTeX: that record's own fields only (never merged with another record), LaTeX-safe through the core writer, the key from `--key` or surname + year + first significant title word (`he2016deep`). Without `--pick`, only a record that is not `weak` is printed; otherwise the list is shown on stderr and the exit code is 1.
 
@@ -92,7 +94,8 @@ Entry = { file, key, index, type, title,
   reasons: [string],                 // decide() reasons, e.g. "core_fields_match", "wrong_year"
   blocking, network_only, block: [code], action,   // strict verdict and what to do ("" when passing)
   record: Record|null,               // the record the status rests on
-  fix: { kind: "identifier"|"additive", record: Record, changes: [{ field, from, to }] } | null,
+  fix: { kind: "identifier", record: Record, changes: [{ field, from, to }] } | null,
+  suggested_fields: [string],        // verified: fields the record would add, never applied
   diffs: [{ field, entry, record }], // field differences against record
   detail,                            // needs_review: the records and fields behind it when diffs do not show them ("" otherwise)
   candidates: [Record & { same_work, recommended }],
@@ -101,11 +104,12 @@ Entry = { file, key, index, type, title,
   integrity: [{ code, field, message, blocking }],
   duplicate_of, source_warnings: [string], lookup_error,
   unavailable_providers: [string],   // lookup_failed (provider_unavailable): the databases that did not answer
+  blocked_providers: [string],       // those of them that answered with a bot check
   fingerprint, approval: { state: "approved"|"stale", fingerprint, approved_fingerprint, reason, date } | null }
 // invalid items: { file, key, index: null, status: "invalid", reasons: [parser reason], line, column, message, blocking, block, action }
 
 Record = { source, id, authoritative, type, title, authors, year, venue, doi, pmid, pmcid, arxiv, url }
-// source: crossref_doi, crossref_search, pubmed, dblp, openreview, local_arxiv (authoritative);
+// source: crossref_doi, crossref_search, pubmed, dblp, openreview, local_arxiv, proceedings (authoritative);
 //         semantic_scholar_match, semantic_scholar_search (discovery only)
 ```
 

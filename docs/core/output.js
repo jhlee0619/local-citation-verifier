@@ -3,10 +3,10 @@
  * status badges and counts, and export readiness with its confirmation
  * token. DOM-free and markup-free; it never changes the results it reads.
  */
-import { entryVenue, present, titleIsSpecific, titleKey } from "./text.js?v=20261012-s17";
-import { writeBib } from "./bibtex.js?v=20261012-s17";
-import { applyCandidateToEntry, CORE_FIELDS, entryIntegrityIssues, isAuthoritative, isSeriousNotice } from "./records.js?v=20261012-s17";
-import { applyDecision, originalDecision, resolveCandidate, reviewIssueCode } from "./verify.js?v=20261012-s17";
+import { entryVenue, present, titleIsSpecific, titleKey } from "./text.js?v=20261012-s18";
+import { writeBib } from "./bibtex.js?v=20261012-s18";
+import { applyCandidateToEntry, CORE_FIELDS, entryIntegrityIssues, isAuthoritative, isSeriousNotice } from "./records.js?v=20261012-s18";
+import { applyDecision, originalDecision, resolveCandidate, reviewIssueCode } from "./verify.js?v=20261012-s18";
 
   // ─── Preview state ─────────────────────────────────────────────────
   function isBlockingIssue(issue) {

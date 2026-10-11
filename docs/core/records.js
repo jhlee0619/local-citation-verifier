@@ -11,7 +11,8 @@ import {
   keySimilarity, MIN_TITLE_SIM, normalizeArxivId, normalizeDoi, normalizePages, normalizePmcid, normalizePmid,
   noticeClass, parseYear, present, safeExternalUrl, sameCanonicalPaperUrl, shouldSuppressAuthorSuggestion,
   TITLE_MATCH_THRESHOLD, titleIsSpecific, titleKey, titleSimilarity, tokenSortRatio, venueEquivalent, venueKey,
-} from "./text.js?v=20261012-s17";
+} from "./text.js?v=20261012-s18";
+import { entryPage } from "./pages.js?v=20261012-s18";
 
   // ─── Fields ────────────────────────────────────────────────────────
   const COMPARED_FIELDS = [
@@ -22,7 +23,7 @@ import {
   const CORE_FIELDS = ["title", "author", "year"];
   // Semantic Scholar is discovery-only, so it comes after every authoritative
   // source when an identifier links several records.
-  const DOI_PRIORITY = ["crossref_doi", "crossref_search", "pubmed", "dblp", "openreview", "local_arxiv", "semantic_scholar_match", "semantic_scholar_search"];
+  const DOI_PRIORITY = ["crossref_doi", "crossref_search", "pubmed", "proceedings", "dblp", "openreview", "local_arxiv", "semantic_scholar_match", "semantic_scholar_search"];
   const ARXIV_PRIORITY = ["local_arxiv", "openreview", "dblp", "crossref_doi", "crossref_search", "pubmed", "semantic_scholar_match", "semantic_scholar_search"];
 
   // ─── Source authority ──────────────────────────────────────────────
@@ -168,7 +169,8 @@ import {
   }
 
   // How the entry's own identifiers link a record: a shared DOI, arXiv ID,
-  // PMID and/or PMCID.
+  // PMID and/or PMCID, the official proceedings page its url names
+  // ("page", pages.js) or its OpenReview forum ("openreview").
   function directLinkKinds(original, candidate) {
     const kinds = [];
     const originalDoi = entryDoi(original);
@@ -179,6 +181,10 @@ import {
     if (originalPmid && entryPmid(candidate) === originalPmid) kinds.push("pmid");
     const originalPmcid = entryPmcid(original);
     if (originalPmcid && entryPmcid(candidate) === originalPmcid) kinds.push("pmcid");
+    const originalPage = entryPage(original)?.key;
+    if (originalPage && entryPage(candidate)?.key === originalPage) kinds.push("page");
+    const originalForum = extractOpenReviewForumId(original?.url || "");
+    if (originalForum && extractOpenReviewForumId(candidate?.url || "") === originalForum) kinds.push("openreview");
     return kinds;
   }
 
@@ -624,6 +630,7 @@ import {
     if (raw.includes("arxiv")) names.push("arXiv");
     if (raw.includes("dblp")) names.push("DBLP");
     if (raw.includes("openreview")) names.push("OpenReview");
+    if (raw.includes("proceedings")) names.push("Proceedings page");
     return names.length ? Array.from(new Set(names)) : ["candidate"];
   }
 
@@ -831,23 +838,23 @@ import {
   // PubMed ranks with Crossref's search records (ties break on the source name).
   const PREPRINT_SOURCE_RANK = Object.freeze({
     local_arxiv: 0, openreview: 2, semantic_scholar_match: 3,
-    semantic_scholar_search: 4, crossref_doi: 5, crossref_search: 6, pubmed: 6, dblp: 7,
+    semantic_scholar_search: 4, crossref_doi: 5, crossref_search: 6, pubmed: 6, dblp: 7, proceedings: 7,
   });
 
   const OPENREVIEW_NATIVE_VENUES = Object.freeze(["iclr", "colm"]);
 
   const CONFERENCE_SOURCE_RANK = Object.freeze({
-    openreview: 1, dblp: 2, semantic_scholar_match: 3,
+    openreview: 1, dblp: 2, proceedings: 2, semantic_scholar_match: 3,
     crossref_doi: 4, crossref_search: 5, pubmed: 5, semantic_scholar_search: 6, local_arxiv: 9,
   });
 
   const DBLP_FIRST_CONFERENCE_SOURCE_RANK = Object.freeze({
-    dblp: 1, crossref_doi: 2, semantic_scholar_match: 3,
+    dblp: 1, proceedings: 1, crossref_doi: 2, semantic_scholar_match: 3,
     openreview: 4, crossref_search: 5, pubmed: 5, semantic_scholar_search: 6, local_arxiv: 9,
   });
 
   const JOURNAL_SOURCE_RANK = Object.freeze({
-    crossref_doi: 0, crossref_search: 2, pubmed: 2, dblp: 3,
+    crossref_doi: 0, crossref_search: 2, pubmed: 2, dblp: 3, proceedings: 3,
     semantic_scholar_match: 4, semantic_scholar_search: 5, openreview: 6, local_arxiv: 9,
   });
 
@@ -1082,7 +1089,8 @@ import {
       !!extractArxivId(original) || !!extractArxivId(candidate);
   }
 
-  // Same work: a shared DOI, PMID or PMCID, or a shared arXiv ID (R20), or a
+  // Same work: a shared DOI, PMID or PMCID, a shared arXiv ID (R20), a shared
+  // proceedings page or OpenReview forum, or a
   // specific title (titleIsSpecific) at least TITLE_MATCH_THRESHOLD similar
   // with the same first-author surname and a year within R7. A correction or
   // retraction notice (by its title, Crossref's update-to or PubMed's
@@ -1096,6 +1104,10 @@ import {
     if (pmid && pmid === entryPmid(b)) return true;
     const pmcid = entryPmcid(a);
     if (pmcid && pmcid === entryPmcid(b)) return true;
+    const page = entryPage(a)?.key;
+    if (page && page === entryPage(b)?.key) return true;
+    const forum = extractOpenReviewForumId(a?.url || "");
+    if (forum && forum === extractOpenReviewForumId(b?.url || "")) return true;
     const arxiv = extractArxivId(a);
     if (arxiv && arxiv === extractArxivId(b)) return true;
     if (!titleIsSpecific(a.title) || !titleIsSpecific(b.title)) return false;
@@ -1121,13 +1133,33 @@ import {
     });
   }
 
+  // A workshop named with its host conference ("Machine Learning for Health
+  // NeurIPS Workshop") is the workshop the record names without it
+  // ("Machine Learning for Health Workshop"): the entry's venue words are the
+  // record's plus host-conference acronyms.
+  const HOST_CONFERENCES = new Set(["neurips", "nips", "icml", "iclr", "acl", "emnlp", "naacl", "eacl", "coling", "cvpr",
+    "iccv", "eccv", "aaai", "ijcai", "kdd", "miccai", "colm", "aistats", "uai", "colt", "sigir", "www", "at"]);
+
+  function workshopAtHost(entryVenueText, recordVenueText) {
+    const words = text => venueKey(text).split(" ").filter(Boolean);
+    const extra = words(entryVenueText);
+    const recordWords = words(recordVenueText);
+    if (recordWords.length < 3 || !recordWords.includes("workshop")) return false;
+    for (const word of recordWords) {
+      const index = extra.indexOf(word);
+      if (index < 0) return false;
+      extra.splice(index, 1);
+    }
+    return extra.length > 0 && extra.every(word => HOST_CONFERENCES.has(word)) && extra.some(word => word !== "at");
+  }
+
   // The entry's venue names the record's venue (or, for PubMed, its
   // journal abbreviation, _journalAbbrev: "Nat Methods" for "Nature methods";
-  // for Crossref, one of its container titles).
+  // for Crossref, one of its container titles; a workshop with its host).
   function venueMatches(entryVenueText, record) {
     return venueEquivalent(entryVenueText, entryVenue(record)) ||
       (present(record?._journalAbbrev) && venueEquivalent(entryVenueText, record._journalAbbrev)) ||
-      containerTitleMatches(entryVenueText, record);
+      containerTitleMatches(entryVenueText, record) || workshopAtHost(entryVenueText, entryVenue(record));
   }
 
   function venueConflict(entry, record) {
@@ -1235,11 +1267,18 @@ import {
   }
 
   // A record without a venue makes no entry-type claim; preprints may be
-  // typed article, misc or unpublished alike.
+  // typed article, misc or unpublished alike; a paper of a conference's
+  // proceedings may be typed article or inproceedings alike (Crossref
+  // registers AAAI's as journal articles, Google Scholar exports NeurIPS
+  // papers as @article) when both name that conference.
+  const PROCEEDINGS_PAPER_TYPES = new Set(["article", "inproceedings"]);
+
   function entryTypesEquivalent(entry, record) {
     const a = canonicalEntryType(entry?.ENTRYTYPE);
     const b = canonicalEntryType(record?.ENTRYTYPE);
     if (!a || !b || !present(entryVenue(record)) || a === b) return true;
+    if (PROCEEDINGS_PAPER_TYPES.has(a) && PROCEEDINGS_PAPER_TYPES.has(b) && isConferenceVenueName(entryVenue(record)) &&
+        present(entryVenue(entry)) && venueMatches(entryVenue(entry), record)) return true;
     return versionClass(entry) !== "published" && versionClass(record) === "preprint" &&
       PREPRINT_ENTRY_TYPES.has(a) && PREPRINT_ENTRY_TYPES.has(b);
   }

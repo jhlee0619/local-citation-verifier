@@ -6,7 +6,9 @@
  * User-Agent and Semantic Scholar API key header, arXiv BibTeX wrapped as
  * { id, bibtex }, and Crossref's rate-limit headers passed through so the
  * providers' pacers learn the live limits. PubMed (NCBI E-utilities) and
- * DataCite (/dois/) are asked directly, as on every page origin. Any other
+ * DataCite (/dois/) are asked directly, as on every page origin. An official
+ * proceedings page (/api/page?url=…, docs/core/pages.js) is fetched only
+ * from its allowlisted host, and answered as its <meta> tags. Any other
  * host is refused.
  *
  * Successful GET answers (HTTP 200, no error body) are kept in a disk cache,
@@ -16,6 +18,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { PAGE_HOSTS, proceedingsPage } from "../../docs/core/pages.js";
 
 // The page origin the providers resolve /api/* paths against. ".invalid"
 // never resolves, so a request that bypassed this module could not leave.
@@ -44,6 +47,8 @@ export const PROXY_ROUTES = Object.freeze([
   Object.freeze({ route: "/api/openreview/", upstream: "https://api2.openreview.net/", allowed: Object.freeze(["notes/search"]) }),
 ]);
 export const ARXIV_ROUTE = "/api/arxiv/bibtex";
+export const PAGE_ROUTE = "/api/page";
+export const MAX_PAGE_BYTES = 2 * 1024 * 1024;
 export const HEALTH_ROUTE = "/api/health";
 export const APP_SIGNATURE = Object.freeze({ app: "local-citation-verifier", ok: true });
 // proxy_core.FORWARDED_UPSTREAM_HEADERS, plus NCBI's limit for the PubMed pacer.
@@ -88,8 +93,8 @@ export function parseArxivId(value) {
 }
 
 // What answers a request the providers make: { kind: "health" }, { kind:
-// "arxiv", id, url }, { kind: "proxy", url } (a metadata route) or { kind:
-// "direct", url } (PubMed, DataCite /dois/). BadRequestError for a path the
+// "arxiv", id, url }, { kind: "page", url }, { kind: "proxy", url } (a
+// metadata route) or { kind: "direct", url } (PubMed, DataCite /dois/). BadRequestError for a path the
 // proxy refuses; an Error for any other host.
 export function upstreamFor(requestUrl, origin = globalThis.window?.location?.origin || LCV_ORIGIN) {
   const url = new URL(String(requestUrl));
@@ -97,6 +102,11 @@ export function upstreamFor(requestUrl, origin = globalThis.window?.location?.or
   if (url.origin === DATACITE_ORIGIN && url.pathname.startsWith("/dois/")) return { kind: "direct", url: url.href };
   if (url.origin !== origin) throw new Error(`lcv refuses a request to ${url.origin}`);
   if (url.pathname === HEALTH_ROUTE) return { kind: "health" };
+  if (url.pathname === PAGE_ROUTE) {
+    const page = proceedingsPage(url.searchParams.get("url") ?? "");
+    if (!page) throw new BadRequestError("url must be an official proceedings page");
+    return { kind: "page", url: page.url };
+  }
   if (url.pathname.startsWith(ARXIV_ROUTE)) {
     const id = parseArxivId(url.searchParams.get("id") ?? "");
     return { kind: "arxiv", id, url: `https://arxiv.org/bibtex/${id}` };
@@ -239,6 +249,38 @@ export function createCliFetch({ transport = globalThis.fetch, cache = null, env
     return { status: response.status, body, headers: response.headers };
   }
 
+  // proxy_core.fetch_page_meta: the page's <meta> tags, { url, meta }, kept
+  // in the cache under the /api/page URL (the page itself is HTML, which
+  // the cache refuses). Each redirect is checked before it is followed (at
+  // most three): one off the allowlisted hosts is refused.
+  async function proceedingsMeta(url, signal) {
+    const key = `${LCV_ORIGIN}${PAGE_ROUTE}?url=${encodeURIComponent(url)}`;
+    const cached = cache?.get(key);
+    if (cached) {
+      counters.cacheHits++;
+      return JSON.parse(cached.body);
+    }
+    let current = url;
+    let response;
+    for (let hop = 0; ; hop++) {
+      counters.requests++;
+      const host = new URL(current).host;
+      counters.hosts[host] = (counters.hosts[host] || 0) + 1;
+      response = await transport(current, { headers: upstreamHeaders(current, env), signal, redirect: "manual" });
+      if (![301, 302, 303, 307, 308].includes(response.status)) break;
+      const next = new URL(response.headers?.get?.("location") || "", current);
+      if (hop >= 2 || next.protocol !== "https:" || !PAGE_HOSTS.includes(next.hostname.toLowerCase()))
+        throw new UpstreamError("the proceedings page redirected off its site");
+      current = next.href;
+    }
+    if (response.status !== 200) throw new UpstreamError(`the proceedings page returned HTTP ${response.status}`);
+    const bytes = Buffer.from(await response.arrayBuffer());
+    if (bytes.length > MAX_PAGE_BYTES) throw new UpstreamError("proceedings page response is too large");
+    const answer = { url: current, meta: (bytes.toString("utf8").match(/<meta\b[^>]*>/gi) || []).join("\n") };
+    cache?.set(key, { status: 200, contentType: "application/json", body: JSON.stringify(answer) });
+    return answer;
+  }
+
   return async function lcvFetch(input, init = {}) {
     const method = String(init.method || "GET").toUpperCase();
     const signal = init.signal;
@@ -260,6 +302,7 @@ export function createCliFetch({ transport = globalThis.fetch, cache = null, env
     }
 
     try {
+      if (target.kind === "page") return jsonResponse(200, await proceedingsMeta(target.url, signal));
       if (target.kind === "arxiv") {
         // proxy_core.fetch_arxiv_bibtex: any HTTP error is a 502.
         const answer = await upstreamGet(target.url, { signal, limit: MAX_ARXIV_BIBTEX_BYTES, label: "arXiv" });

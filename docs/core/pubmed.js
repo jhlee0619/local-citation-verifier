@@ -5,12 +5,12 @@
  * erratum notices. Asked directly from the browser on every origin (no
  * proxy route), without credentials, e-mail address or API key. DOM-free.
  */
-import * as Net from "./net.js?v=20261012-s17";
+import * as Net from "./net.js?v=20261012-s18";
 import {
   authorNames, entryDoi, entryPmcid, entryPmid, foldText, htmlToText, normalizeDoi, normalizePmcid,
   normalizePmid, parseYear,
-} from "./text.js?v=20261012-s17";
-import { createRecord, mergeNotices } from "./records.js?v=20261012-s17";
+} from "./text.js?v=20261012-s18";
+import { createRecord, mergeNotices } from "./records.js?v=20261012-s18";
 
   const EUTILS = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/";
   // E-utilities ask callers to name their tool; no e-mail address or API key

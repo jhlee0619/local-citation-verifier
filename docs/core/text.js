@@ -8,7 +8,7 @@
  * The side-effect import installs the vendored fuzzball bundle as
  * globalThis.fuzzball, which tokenSortRatio reads.
  */
-import "../vendor/fuzzball-2.2.3.umd.min.js?v=20261012-s17";
+import "../vendor/fuzzball-2.2.3.umd.min.js?v=20261012-s18";
 
   // ─── Matching thresholds ───────────────────────────────────────────
   const TITLE_MATCH_THRESHOLD = 85;
@@ -629,9 +629,22 @@ import "../vendor/fuzzball-2.2.3.umd.min.js?v=20261012-s17";
     return /(^|\s+and\s+)(others|et\s+al\.?)\b|\.\.\./i.test(String(authorStr || ""));
   }
 
+  // Two surname keys one typing slip apart (a letter added, dropped or
+  // changed, or two neighbours swapped), both at least five letters long.
+  function oneSlipApart(a, b) {
+    if (!a || !b || a === b || Math.min(a.length, b.length) < 5 || Math.abs(a.length - b.length) > 1) return false;
+    let i = 0;
+    while (i < a.length && i < b.length && a[i] === b[i]) i++;
+    const restA = a.slice(i), restB = b.slice(i);
+    return restA.slice(1) === restB.slice(1) || restA.slice(1) === restB || restA === restB.slice(1) ||
+      (restA.length > 1 && restA[0] === restB[1] && restA[1] === restB[0] && restA.slice(2) === restB.slice(2));
+  }
+
   // Same people in the same order: equal counts with equal surname keys and
   // compatible given names, or a list truncated with "others" whose named
-  // part is a prefix of the other list.
+  // part is a prefix of the other list. A typo in one co-author's surname
+  // (PMLR's "Alesentzer" for Alsentzer) keeps an otherwise equal list the
+  // same; the first author must match exactly.
   function authorListsEquivalent(a, b) {
     const left = authorNames(a);
     const right = authorNames(b);
@@ -643,6 +656,12 @@ import "../vendor/fuzzball-2.2.3.umd.min.js?v=20261012-s17";
     const prefixOf = (shorter, longer) => shorter.length <= longer.length &&
       shorter.every((name, index) => samePerson(name, longer[index]));
     if (leftNamed.length === rightNamed.length && prefixOf(leftNamed, rightNamed)) return true;
+    if (leftNamed.length === rightNamed.length && !truncated(left) && !truncated(right)) {
+      const misses = leftNamed.flatMap((name, index) => samePerson(name, rightNamed[index]) ? [] : [index]);
+      const [miss] = misses;
+      if (misses.length === 1 && miss > 0 && oneSlipApart(leftNamed[miss].key, rightNamed[miss].key) &&
+          givensCompatible(leftNamed[miss].given, rightNamed[miss].given)) return true;
+    }
     if (truncated(left) && prefixOf(leftNamed, rightNamed)) return true;
     if (truncated(right) && prefixOf(rightNamed, leftNamed)) return true;
     return false;
@@ -733,7 +752,9 @@ import "../vendor/fuzzball-2.2.3.umd.min.js?v=20261012-s17";
   // Venue lookup key: venueText without parentheticals, years, ordinals
   // ("13th" anywhere; a spelled-out one at the start when at least two
   // words follow: "The Thirteenth International Conference on …"), a
-  // leading "Proceedings of (the)" / "Proc." and punctuation.
+  // leading "Proceedings of (the)" / "Proc.", punctuation and a trailing
+  // volume number (Crossref's "Advances in Neural Information Processing
+  // Systems 38").
   function venueKey(text) {
     return venueText(text)
       .replace(/\([^()]*\)/g, " ")
@@ -743,7 +764,8 @@ import "../vendor/fuzzball-2.2.3.umd.min.js?v=20261012-s17";
       .replace(/^the\s+/, "")
       .replace(SPELLED_ORDINAL, "")
       .replace(NON_WORD, " ")
-      .trim();
+      .trim()
+      .replace(/(?<=\p{L}[\p{L}\p{N}]*)\s+\d{1,3}$/u, "");
   }
 
   // venueKey without organiser and event words, for venues the table lacks.
@@ -798,6 +820,8 @@ import "../vendor/fuzzball-2.2.3.umd.min.js?v=20261012-s17";
   const VENUE_ABBREVIATIONS = {
     "advances in neural information processing systems": "NeurIPS",
     "neural information processing systems": "NeurIPS",
+    "annual conference on neural information processing systems": "NeurIPS",
+    "conference on neural information processing systems": "NeurIPS",
     "nips": "NeurIPS",
     "international conference on machine learning": "ICML",
     "international conference on learning representations": "ICLR",

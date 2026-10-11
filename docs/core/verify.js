@@ -7,15 +7,15 @@
  * callbacks for everything it renders.
  */
 import {
-  authorKeys, entryDoi, entryPmcid, entryPmid, entryVenue, extractArxivId, parseYear, present, stripLatex,
-  TITLE_MATCH_THRESHOLD, titleKey, titleSimilarity,
-} from "./text.js?v=20261012-s17";
-import { candidateFingerprint as recordFingerprint, CORE_FIELDS } from "./records.js?v=20261012-s17";
-import * as Rec from "./records.js?v=20261012-s17";
-import * as Ver from "./versions.js?v=20261012-s17";
-import * as Net from "./net.js?v=20261012-s17";
-import { runBoundedQueue } from "./net.js?v=20261012-s17";
-import * as Judge from "./judge.js?v=20261012-s17";
+  authorIntegrityIssues, authorKeys, authorListsEquivalent, entryDoi, entryPmcid, entryPmid, entryVenue, extractArxivId,
+  firstAuthorSurname, parseYear, present, stripLatex, TITLE_MATCH_THRESHOLD, titleKey, titleSimilarity,
+} from "./text.js?v=20261012-s18";
+import { candidateFingerprint as recordFingerprint, CORE_FIELDS } from "./records.js?v=20261012-s18";
+import * as Rec from "./records.js?v=20261012-s18";
+import * as Ver from "./versions.js?v=20261012-s18";
+import * as Net from "./net.js?v=20261012-s18";
+import { runBoundedQueue } from "./net.js?v=20261012-s18";
+import * as Judge from "./judge.js?v=20261012-s18";
 
   // ─── Decisions ─────────────────────────────────────────────────────
   const ORIGINAL_DEFAULT_STATUSES = new Set([
@@ -317,7 +317,7 @@ import * as Judge from "./judge.js?v=20261012-s17";
   });
 
   // Preference among equally valid records: the by-DOI Crossref record first.
-  const SOURCE_PREFERENCE = ["crossref_doi", "crossref_search", "pubmed", "dblp", "openreview", "semantic_scholar_match", "semantic_scholar_search", "local_arxiv"];
+  const SOURCE_PREFERENCE = ["crossref_doi", "crossref_search", "pubmed", "proceedings", "dblp", "openreview", "semantic_scholar_match", "semantic_scholar_search", "local_arxiv"];
 
   function runControllerOf(ctx) {
     return ctx?.controller || defaultController;
@@ -543,20 +543,19 @@ import * as Judge from "./judge.js?v=20261012-s17";
   //                 year, venue, entry type) agree, and every identifier the
   //                 entry carries (DOI, arXiv ID, PMID, PMCID) exists
   //                 (Rec.identifierStates). Fields the entry lacks are
-  //                 non-blocking suggestions.
-  //   Auto-updated  (a) "identifier": the record the entry's DOI/arXiv ID
+  //                 optional rows (suggestedFields: one strongly matching
+  //                 record's, whose DOI round-trips through Crossref to a
+  //                 strong match), never applied.
+  //   Auto-updated  "identifier": the record the entry's DOI/arXiv ID
   //                 links (selectCanonical: complete, atomic, unique core,
   //                 no regression), the same work, passing validatePick, with
   //                 no integrity issue on either side; applied whole.
-  //                 (b) "additive": one strongly matching record adds fields
-  //                 the entry lacks, never overwriting a value, and its DOI
-  //                 round-trips through Crossref to a strong match.
   //   Needs Review  any other change to a same-work entry, integrity issues,
   //                 id_title_mismatch, id_conflict, core_conflict,
   //                 doi_unconfirmed, arxiv_unconfirmed, pmid_unconfirmed (an
   //                 identifier of the entry definitively absent: never
   //                 removed automatically), doi_conflict, pmid_conflict,
-  //                 metadata_conflict, a failed DOI round trip,
+  //                 metadata_conflict,
   //                 or a risk the judge reports; also, without a same-work
   //                 record, a record with the entry's exact title by other
   //                 authors (wrong_authors) or of another year (wrong_year),
@@ -588,19 +587,39 @@ import * as Judge from "./judge.js?v=20261012-s17";
     return Rec.entryIntegrityIssues(entry).filter(isBlockingIssue);
   }
 
-  // The entry's own integrity issues, without an entry-type/venue mismatch
-  // that the entry's own DOI record settles: an authoritative record of the
-  // entry's DOI with the entry's type (Crossref's journal-article for an
-  // @article in "Proceedings of the AAAI Conference on Artificial
-  // Intelligence"). waived lists the codes dropped.
+  // The entry's own integrity issues, without those an authoritative record
+  // settles (waived lists the codes dropped):
+  //   entrytype_venue_mismatch  a record of the entry's DOI with the entry's
+  //     type (Crossref's journal-article for an @article in "Proceedings of
+  //     the AAAI Conference on Artificial Intelligence"), or a published
+  //     record that confirms the entry's core fields (a NeurIPS paper cited
+  //     as @article, as Google Scholar exports it);
+  //   mixed_manifestation  a published record confirms the entry's core
+  //     fields and the arXiv record of the entry's arXiv identifier has the
+  //     entry's title and first author (an ICLR paper cited with its arXiv
+  //     DOI: the venue has none);
+  //   author_duplicates  a record of the same work lists the same names
+  //     (two authors called Hao Wang).
   function integrityOf(entry, pool) {
     const issues = Rec.entryIntegrityIssues(entry);
+    const authoritative = (pool || []).filter(Rec.isAuthoritative);
     const doi = entryDoi(entry);
     const type = Rec.canonicalEntryType(entry?.ENTRYTYPE);
-    const settled = !!doi && !!type && (pool || []).some(record => Rec.isAuthoritative(record) &&
-      entryDoi(record) === doi && present(record.ENTRYTYPE) && Rec.canonicalEntryType(record.ENTRYTYPE) === type);
-    if (!settled || !issues.some(issue => issue.code === "entrytype_venue_mismatch")) return { issues, waived: [] };
-    return { issues: issues.filter(issue => issue.code !== "entrytype_venue_mismatch"), waived: ["entrytype_venue_mismatch"] };
+    const confirmedAsPublished = () => authoritative.some(record =>
+      Rec.versionClass(record) === "published" && Rec.coreComparison(entry, record).equal);
+    const arxiv = extractArxivId(entry);
+    const settles = {
+      entrytype_venue_mismatch: () => authoritative.some(record => !!doi && !!type && entryDoi(record) === doi &&
+        present(record.ENTRYTYPE) && Rec.canonicalEntryType(record.ENTRYTYPE) === type) || confirmedAsPublished(),
+      mixed_manifestation: () => !!arxiv && confirmedAsPublished() && authoritative.some(record =>
+        extractArxivId(record) === arxiv && titleSimilarity(entry.title, record.title) >= TITLE_MATCH_THRESHOLD &&
+        firstAuthorSurname(entry.author) === firstAuthorSurname(record.author)),
+      author_duplicates: () => authoritative.some(record => Rec.sameWork(entry, record) &&
+        authorListsEquivalent(entry.author, record.author) &&
+        authorIntegrityIssues(record.author || "").some(issue => issue.code === "author_duplicates")),
+    };
+    const waived = [...new Set(issues.map(issue => issue.code))].filter(code => settles[code]?.());
+    return { issues: issues.filter(issue => !waived.includes(issue.code)), waived };
   }
 
   // Reasons that rest on what the providers did not return: nothing
@@ -699,14 +718,17 @@ import * as Judge from "./judge.js?v=20261012-s17";
     };
   }
 
-  // An authoritative record whose core fields agree with the entry: linked by
-  // the entry's DOI/arXiv ID first, else a strong match.
+  // An authoritative record whose core fields (title, authors, year, venue,
+  // type) agree with the entry: linked by the entry's own identifier first,
+  // else any. Nothing is taken from it, so other records of the work that
+  // disagree (a PubMed title hyphenated "AU-TOREGRESSIVE", another author
+  // spelling) do not matter here; they do for the suggestions (strongMatch).
   function confirmingRecord(entry, lookup) {
     const pool = lookup.candidates;
     const agrees = record => Rec.isAuthoritative(record) && Rec.coreComparison(entry, record).equal;
     const direct = directRecords(entry, pool).filter(agrees).sort(byPreference);
     if (direct.length) return direct[0];
-    return pool.filter(record => Rec.strongMatch(entry, record, pool) && agrees(record)).sort(byPreference)[0] || null;
+    return pool.filter(agrees).sort(byPreference)[0] || null;
   }
 
   function addsIntegrityIssue(entry, fields) {
@@ -791,7 +813,10 @@ import * as Judge from "./judge.js?v=20261012-s17";
     const identifierFailed = identifiers.some(item => item.state === "failed");
     const confirming = reasons.length || identifierFailed ? null : confirmingRecord(entry, lookup);
     if (confirming) {
-      if (entryDoi(entry) && entryDoi(confirming) && entryDoi(entry) !== entryDoi(confirming)) reasons.push("doi_conflict");
+      // The arXiv DOI of a work confirmed as published (mixed_manifestation
+      // waived) is the preprint's DOI, not a conflicting one.
+      const preprintDoi = integrity.waived.includes("mixed_manifestation") && !!extractArxivId({ doi: entryDoi(entry) });
+      if (entryDoi(entry) && entryDoi(confirming) && entryDoi(entry) !== entryDoi(confirming) && !preprintDoi) reasons.push("doi_conflict");
       if (pubmedIdConflict(entry, pool, sameWorkRecords)) reasons.push("pmid_conflict");
       if (Rec.hasCriticalMetadataConflict(entry, confirming)) reasons.push("metadata_conflict");
     }
@@ -867,15 +892,6 @@ import * as Judge from "./judge.js?v=20261012-s17";
     return choices.findIndex(confirmed);
   }
 
-  function fieldEditsFor(record, fields) {
-    return Object.fromEntries(Object.entries(fields).map(([field, value]) => [field, {
-      action: "found",
-      value,
-      touched: false,
-      provenance: provenance("system", record._recordSource || "unknown", record._recordId || ""),
-    }]));
-  }
-
   // The review reason when same-work records exist but none confirms the
   // entry and no auto-update applies.
   function changeReason(entry, assessment, record) {
@@ -899,8 +915,9 @@ import * as Judge from "./judge.js?v=20261012-s17";
     );
   }
 
-  // The lookup failure while applicable authoritative providers failed.
-  function providerUnavailable(base, names, record = null) {
+  // The lookup failure while applicable authoritative providers failed;
+  // blocked: those of them that served a bot challenge.
+  function providerUnavailable(base, names, record = null, blocked = []) {
     return {
       ...base,
       status: "lookup_failed",
@@ -908,6 +925,7 @@ import * as Judge from "./judge.js?v=20261012-s17";
       reasons: ["provider_unavailable"],
       record,
       unavailableProviders: names.slice(),
+      blockedProviders: blocked.filter(name => names.includes(name)),
       lookupError: `${names.join(", ")} did not answer`,
     };
   }
@@ -920,6 +938,7 @@ import * as Judge from "./judge.js?v=20261012-s17";
     const verdict = judgeVerdict(entry, lookup || { choices }, answer);
     const assessment = assess(entry, lookup);
     const unavailable = lookup?.unavailableProviders || [];
+    const blocked = lookup?.blockedProviders || [];
     const base = {
       choices,
       decision: originalDecision(false),
@@ -937,7 +956,7 @@ import * as Judge from "./judge.js?v=20261012-s17";
       // an explicit choice, never recommended or applied.
       if (assessment.reasons.length)
         return { ...base, status: "needs_review", reason: assessment.reasons[0], reasons: assessment.reasons, record: assessment.titleMatch };
-      if (unavailable.length) return providerUnavailable(base, unavailable);
+      if (unavailable.length) return providerUnavailable(base, unavailable, null, blocked);
       return { ...base, status: "not_found", reason: "no_matching_record", reasons: ["no_matching_record"] };
     }
     const reasons = assessment.reasons.slice();
@@ -947,7 +966,7 @@ import * as Judge from "./judge.js?v=20261012-s17";
       const shown = choices[recommended] || record ||
         choices.find(choice => Rec.sameWork(entry, choice)) || choices[0] || null;
       if (unavailable.length && reasonList.every(reason => ABSENCE_REASONS.has(reason)))
-        return providerUnavailable(base, unavailable, shown);
+        return providerUnavailable(base, unavailable, shown, blocked);
       return {
         ...base, status: "needs_review", reason: reasonList[0], reasons: reasonList, recommendedIndex: recommended, record: shown,
         detail: reviewDetail(entry, reasonList, assessment, record),
@@ -967,23 +986,16 @@ import * as Judge from "./judge.js?v=20261012-s17";
     }
 
     if (assessment.confirming) {
-      const additive = assessment.additive;
-      if (additive) {
-        // Crossref did not answer the round trip: a lookup failure, not a review.
-        if (lookup.roundTrip?.error)
-          return providerUnavailable(base, [...new Set([...unavailable, "Crossref"])], additive.record);
-        if (!lookup.roundTrip?.ok) return review(["doi_round_trip_failed"], additive.record);
-        return {
-          ...base,
-          status: "updated",
-          reason: "additive_only",
-          reasons: ["additive_only"],
-          autoSelectSource: "additive",
-          record: additive.record,
-          fieldEdits: fieldEditsFor(additive.record, additive.fields),
-        };
-      }
-      return { ...base, status: "verified", reason: "core_fields_match", reasons: ["core_fields_match"], record: assessment.confirming };
+      // The entry is right as it stands. Fields a strongly matching record
+      // would add (a DOI, pages) are offered as optional rows of that record
+      // (suggestedFields), never applied: the entry keeps its own text. A
+      // DOI is offered only when it round-trips to the same work.
+      const additive = assessment.additive && lookup.roundTrip?.ok ? assessment.additive : null;
+      return {
+        ...base, status: "verified", reason: "core_fields_match", reasons: ["core_fields_match"],
+        record: additive ? additive.record : assessment.confirming,
+        suggestedFields: additive ? Object.keys(additive.fields) : [],
+      };
     }
 
     const auto = lookup.autoRecord;
@@ -1072,6 +1084,7 @@ import * as Judge from "./judge.js?v=20261012-s17";
       noticesByDoi: options.noticesByDoi || new Map(),
       identifiers: options.identifiers || {},
       unavailableProviders: options.unavailableProviders || [],
+      blockedProviders: options.blockedProviders || [],
       roundTrip: null,
       pendingJudge: null,
     };
@@ -1086,7 +1099,10 @@ import * as Judge from "./judge.js?v=20261012-s17";
     const pool = await ctx.providers.searchCandidatePool(title, lookupEntry, run);
     if (!controller.isActive(run)) return null;
     if (!pool.candidates.length)
-      return { absence: "not_found", sourceWarnings: pool.sourceWarnings, unavailableProviders: pool.unavailableProviders || [] };
+      return {
+        absence: "not_found", sourceWarnings: pool.sourceWarnings,
+        unavailableProviders: pool.unavailableProviders || [], blockedProviders: pool.blockedProviders || [],
+      };
     const original = originalSnapshot;
     const preferPublished = run.settings.preferPublished;
     const lookup = buildLookup(original, pool.candidates, {
@@ -1096,6 +1112,7 @@ import * as Judge from "./judge.js?v=20261012-s17";
       noticesByDoi: pool.noticesByDoi,
       identifiers: pool.identifiers,
       unavailableProviders: pool.unavailableProviders,
+      blockedProviders: pool.blockedProviders,
     });
     const { clustered, choices } = lookup;
     if (lookup.additive) {
@@ -1217,12 +1234,14 @@ import * as Judge from "./judge.js?v=20261012-s17";
       selected_choice: selectedChoice,
       auto_select_source: outcome.autoSelectSource || "",
       additive_fields: Object.keys(outcome.fieldEdits || {}),
+      suggested_fields: outcome.suggestedFields || [],
       paper_url: found ? Rec.paperUrlForEntry(found) : Rec.paperUrlForEntry(entry),
       pending_rerank: null,
       duplicate_of: run.duplicateOfByIndex[index] || null,
       lookup_error: null,
       source_warnings: [],
       unavailable_providers: outcome.unavailableProviders || [],
+      blocked_providers: outcome.blockedProviders || [],
       integrity_issues: outcome.integrityIssues || Rec.entryIntegrityIssues(entry),
       integrity_waived: outcome.integrityWaived || [],
       notices: outcome.notices || [],
@@ -1255,6 +1274,8 @@ import * as Judge from "./judge.js?v=20261012-s17";
       const r = buildResult(run, entry, index, bareOutcome(entry, "lookup_failed", proxyMissing ? "proxy_missing" : "lookup_failed"));
       r.lookup_error = proxyMissing ? "metadata proxy missing" : "metadata providers unavailable";
       r.source_warnings = lookupError.sourceWarnings || [];
+      r.unavailable_providers = lookupError.unavailableProviders || [];
+      r.blocked_providers = lookupError.blockedProviders || [];
       return r;
     }
     if (!lookup || lookup.absence) {
@@ -1263,7 +1284,7 @@ import * as Judge from "./judge.js?v=20261012-s17";
       const unavailable = lookup?.unavailableProviders || [];
       const outcome = bareOutcome(entry, "not_found", "no_matching_record");
       const r = buildResult(run, entry, index, unavailable.length && outcome.status === "not_found"
-        ? providerUnavailable(outcome, unavailable) : outcome);
+        ? providerUnavailable(outcome, unavailable, null, lookup?.blockedProviders || []) : outcome);
       r.source_warnings = lookup?.sourceWarnings || [];
       return r;
     }

@@ -6,12 +6,12 @@
  * run and the Markdown report. DOM-free; ui/audit-view.js wires it to the
  * page.
  */
-import * as Net from "./net.js?v=20261012-s17";
-import * as Judge from "./judge.js?v=20261012-s17";
-import { normalizeEvidenceLanguage, safeExternalUrl } from "./text.js?v=20261012-s17";
-import { sourceWarnings, ssToStandard, SS_MATCH, SS_PAPER } from "./providers.js?v=20261012-s17";
-import { sameWork } from "./records.js?v=20261012-s17";
-import { defaultController } from "./verify.js?v=20261012-s17";
+import * as Net from "./net.js?v=20261012-s18";
+import * as Judge from "./judge.js?v=20261012-s18";
+import { normalizeEvidenceLanguage, safeExternalUrl } from "./text.js?v=20261012-s18";
+import { sourceWarnings, ssToStandard, SS_MATCH, SS_PAPER } from "./providers.js?v=20261012-s18";
+import { sameWork } from "./records.js?v=20261012-s18";
+import { defaultController } from "./verify.js?v=20261012-s18";
 
   const SS_EVIDENCE_FIELDS = "title,abstract,tldr,authors,year,venue,publicationVenue,externalIds,url";
 

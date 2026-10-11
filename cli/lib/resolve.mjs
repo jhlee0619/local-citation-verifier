@@ -147,7 +147,7 @@ function matchConfidence(item, seed) {
   return "weak";
 }
 
-const SOURCE_PREFERENCE = ["crossref_doi", "crossref_search", "pubmed", "dblp", "openreview", "local_arxiv", "semantic_scholar_match", "semantic_scholar_search"];
+const SOURCE_PREFERENCE = ["crossref_doi", "crossref_search", "pubmed", "proceedings", "dblp", "openreview", "local_arxiv", "semantic_scholar_match", "semantic_scholar_search"];
 const preference = record => {
   const index = SOURCE_PREFERENCE.indexOf(record._recordSource);
   return index < 0 ? SOURCE_PREFERENCE.length : index;

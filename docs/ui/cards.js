@@ -5,12 +5,12 @@
  * clicks and typing on a card report through the actions main.js passes to
  * bindCardEvents and only restyle the row they touch.
  */
-import { html, setHTML, safeUrl } from "./dom.js?v=20261012-s17";
-import { entryVenue, stripLatex } from "../core/text.js?v=20261012-s17";
-import { DBLP_API, ON_GITHUB_PAGES, OPENREVIEW_API } from "../core/providers.js?v=20261012-s17";
-import * as Rec from "../core/records.js?v=20261012-s17";
-import * as D from "../core/verify.js?v=20261012-s17";
-import * as Out from "../core/output.js?v=20261012-s17";
+import { html, setHTML, safeUrl } from "./dom.js?v=20261012-s18";
+import { entryVenue, stripLatex } from "../core/text.js?v=20261012-s18";
+import { DBLP_API, ON_GITHUB_PAGES, OPENREVIEW_API } from "../core/providers.js?v=20261012-s18";
+import * as Rec from "../core/records.js?v=20261012-s18";
+import * as D from "../core/verify.js?v=20261012-s18";
+import * as Out from "../core/output.js?v=20261012-s18";
 
   // ─── Hint text ─────────────────────────────────────────────────────
   const PROVIDER_NAMES = ["CrossRef", "PubMed", "Semantic Scholar", ...(DBLP_API ? ["DBLP"] : []), ...(OPENREVIEW_API ? ["OpenReview"] : [])];
@@ -33,6 +33,7 @@ import * as Out from "../core/output.js?v=20261012-s17";
       lookupFailed: "Publication lookup failed before the databases could answer. This is usually rate limiting or an upstream outage, not evidence that the paper is missing. Use Retry failed lookups, or re-run verification later.",
       proxyMissing: "No database was asked: this page's server does not answer as the local metadata proxy (/api/health). Start the app with run-local.cmd or server/vllm_proxy_server.py and reload, or use the GitHub Pages build. This is not evidence that the paper is missing.",
       providerUnavailable: names => `${names} did not answer (rate limited or unavailable), so this entry could not be checked against every database. This is not evidence that the paper is missing or wrong. Use Retry failed lookups, or re-run verification later.`,
+      providerBlocked: (blocked, others, choices) => `${blocked} answered with a bot check instead of results (it is blocking automated requests right now)${others ? `, and ${others} did not answer` : ""}, so this entry could not be checked against every database. This is not evidence that the paper is missing or wrong. ${blocked} gives the same answer for a while, so retry in a few minutes; meanwhile ${choices ? "choose a record below if it is the right one, or " : ""}keep the original.`,
       wrongAuthors: "A record with this exact title exists, but its authors differ — check this citation. The record is shown below as a choice; nothing was applied.",
       wrongYear: "A record with this exact title exists, but its year differs — check this citation. The record is shown below as a choice; nothing was applied.",
       discoveryOnly: "Semantic Scholar only — not confirmed by Crossref, PubMed, arXiv, DBLP or OpenReview",
@@ -58,7 +59,6 @@ import * as Out from "../core/output.js?v=20261012-s17";
         core_change_without_id: "A record of this work differs from your entry in authors, year, venue or type, and your entry has no DOI or arXiv ID to confirm it. Compare the fields below and choose.",
         identifier_record_not_auto_applicable: "The record your DOI or arXiv ID identifies cannot be applied automatically (it is incomplete). Compare it below and choose.",
         identifier_record_changes_type_or_venue: "The record your DOI identifies would change your entry type, replace the venue with a series name or shorten it, so it was not applied. Compare it below and choose.",
-        doi_round_trip_failed: "A matching record was found, but its DOI could not be confirmed, so nothing was added automatically.",
         metadata_conflict: "Volume, issue, pages, venue or author metadata conflicts with the matching record.",
         judge_risk: "The AI judge flagged a risk for this match.",
         integrity: "Your entry's own fields conflict (see the input-integrity note). Choose a complete record, or keep yours after fixing it.",
@@ -74,6 +74,7 @@ import * as Out from "../core/output.js?v=20261012-s17";
       lookupFailed: "데이터베이스가 응답하기 전에 조회가 실패했습니다. 보통 rate limit 또는 upstream 장애이며, 논문이 없다는 뜻은 아닙니다. ‘실패한 조회 다시 시도’를 쓰거나 잠시 뒤 다시 실행하세요.",
       proxyMissing: "어떤 데이터베이스에도 묻지 않았습니다. 이 페이지의 서버가 로컬 메타데이터 프록시(/api/health)로 응답하지 않습니다. run-local.cmd 또는 server/vllm_proxy_server.py로 앱을 실행한 뒤 새로고침하거나 GitHub Pages 빌드를 쓰세요. 논문이 없다는 뜻은 아닙니다.",
       providerUnavailable: names => `${names}이(가) 응답하지 않아(rate limit 또는 장애) 모든 데이터베이스로 확인하지 못했습니다. 논문이 없거나 틀렸다는 뜻은 아닙니다. ‘실패한 조회 다시 시도’를 쓰거나 잠시 뒤 다시 실행하세요.`,
+      providerBlocked: (blocked, others, choices) => `${blocked}이(가) 결과 대신 봇 확인 페이지를 보내(지금 자동 요청을 막고 있음)${others ? ` ${others}도 응답하지 않아` : ""} 모든 데이터베이스로 확인하지 못했습니다. 논문이 없거나 틀렸다는 뜻은 아닙니다. ${blocked}은(는) 한동안 같은 답을 보내므로 몇 분 뒤에 다시 시도하세요. 그동안 ${choices ? "아래 레코드가 맞으면 고르거나 " : ""}원본을 유지하세요.`,
       wrongAuthors: "이 제목과 정확히 같은 기록이 있지만 저자가 다릅니다. 인용을 확인하세요. 아래에 선택지로만 표시했고 적용하지 않았습니다.",
       wrongYear: "이 제목과 정확히 같은 기록이 있지만 연도가 다릅니다. 인용을 확인하세요. 아래에 선택지로만 표시했고 적용하지 않았습니다.",
       discoveryOnly: "Semantic Scholar에만 있음 — Crossref, PubMed, arXiv, DBLP, OpenReview로 확인되지 않음",
@@ -99,7 +100,6 @@ import * as Out from "../core/output.js?v=20261012-s17";
         core_change_without_id: "이 논문의 기록이 항목과 저자·연도·venue·유형에서 다르고, 항목에 이를 확인할 DOI나 arXiv ID가 없습니다. 아래 필드를 비교해 선택하세요.",
         identifier_record_not_auto_applicable: "DOI 또는 arXiv ID가 가리키는 기록을 자동 적용할 수 없습니다(불완전한 기록). 아래에서 비교해 선택하세요.",
         identifier_record_changes_type_or_venue: "DOI가 가리키는 기록을 적용하면 항목 유형이 바뀌거나 venue가 시리즈명·더 짧은 이름으로 바뀌므로 적용하지 않았습니다. 아래에서 비교해 선택하세요.",
-        doi_round_trip_failed: "일치하는 기록을 찾았지만 그 DOI를 확인하지 못해 자동으로 추가하지 않았습니다.",
         metadata_conflict: "권·호·쪽·venue 또는 저자 메타데이터가 일치하는 기록과 충돌합니다.",
         judge_risk: "AI 판정기가 이 매칭에 위험 신호를 표시했습니다.",
         integrity: "항목 자체의 필드가 서로 충돌합니다(입력 무결성 안내 참고). 완전한 기록을 고르거나, 고친 뒤 원래 값을 유지하세요.",
@@ -256,6 +256,10 @@ import * as Out from "../core/output.js?v=20261012-s17";
   function reviewHint(r, t) {
     if (r.status === "lookup_failed" && r.lookup_error) {
       if (r.reason === "proxy_missing") return t.proxyMissing;
+      const blocked = r.blocked_providers || [];
+      if (blocked.length)
+        return t.providerBlocked(blocked.join(", "), (r.unavailable_providers || []).filter(name => !blocked.includes(name)).join(", "),
+          (r.candidate_choices || []).length > 0);
       if (r.reason === "provider_unavailable" && r.unavailable_providers?.length) return t.providerUnavailable(r.unavailable_providers.join(", "));
       return t.lookupFailed;
     }

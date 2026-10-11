@@ -84,8 +84,9 @@ function decidedRecord(entry, result, pool) {
     noticesByDoi: pool.noticesByDoi,
     identifiers: pool.identifiers,
     unavailableProviders: pool.unavailableProviders,
+    blockedProviders: pool.blockedProviders,
   });
-  if (lookup.additive) lookup.roundTrip = { ok: result.auto_select_source === "additive" };
+  if (lookup.additive) lookup.roundTrip = { ok: (result.suggested_fields || []).length > 0 };
   const outcome = D.decide(entry, lookup);
   return outcome.status === result.status ? outcome.record : null;
 }
@@ -223,7 +224,9 @@ export function adviceFor(item) {
     parts.push(text);
   } else if (item.status === "not_found")
     parts.push("no database lists this work: replace it with a record from lcv resolve, delete it, or (book, report, guideline) ask a human to approve it with lcv allow");
-  else if (item.status === "lookup_failed" && item.reasons.includes("provider_unavailable"))
+  else if (item.status === "lookup_failed" && (item.blocked_providers || []).length)
+    parts.push(`${item.blocked_providers.join(", ")} answered with a bot check (it is blocking automated requests), so the entry could not be checked against every database; this is not evidence against it: rerun lcv check in a while, not right away`);
+  else if (item.status === "lookup_failed" && (item.reasons.includes("provider_unavailable") || (item.unavailable_providers || []).length))
     parts.push(`${(item.unavailable_providers || []).join(", ") || "a database"} did not answer${(item.source_warnings || []).length ? ` (${item.source_warnings.join(" ")})` : ""}, so the entry could not be checked against every database; this is not evidence against it: rerun lcv check later`);
   else if (item.status === "lookup_failed")
     parts.push(`the lookup failed (${(item.source_warnings || []).join(" ") || item.lookup_error || "network"}): rerun lcv check`);
@@ -295,6 +298,8 @@ export function reportEntries({ file, document, run, poolFor, approvals }) {
       source_warnings: [...(result.source_warnings || [])],
       lookup_error: result.lookup_error || null,
       unavailable_providers: [...(result.unavailable_providers || [])],
+      suggested_fields: [...(result.suggested_fields || [])],
+      blocked_providers: [...(result.blocked_providers || [])],
       fingerprint: entryFingerprint(entry),
       approval: approvalFor(entry, approvals),
     });
@@ -351,6 +356,7 @@ export function itemLine(item) {
     ...(item.lint || []).map(note => note.code),
     ...(item.duplicate_of ? [`duplicate_of:${item.duplicate_of}`] : []),
     ...(item.approval ? [`approval:${item.approval.state}`] : []),
+    ...(item.suggested_fields?.length ? [`could add ${item.suggested_fields.join(", ")} (lcv resolve)`] : []),
   ];
   return [head, item.action, recordRef(target), notes.length ? `[${notes.join(", ")}]` : ""].filter(Boolean).join(" — ");
 }

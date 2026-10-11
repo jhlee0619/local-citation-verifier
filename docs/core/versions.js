@@ -5,12 +5,12 @@
  * choose which representative to recommend or apply; the result status is
  * decided by core/verify.js. DOM-free.
  */
-import { isCorrectionTitle, parseYear } from "./text.js?v=20261012-s17";
+import { isCorrectionTitle, parseYear } from "./text.js?v=20261012-s18";
 import {
   clusterKey, clusterRecords, isPublishedFamily, limitRepresentatives, matchingCluster,
   metadataRegressionFields, originalIdentity, publishedClusters, sameWork, versionIdentity,
   yearDriftOk,
-} from "./records.js?v=20261012-s17";
+} from "./records.js?v=20261012-s18";
 
   const LLM_MIN_CONFIDENCE = 0.75;
 

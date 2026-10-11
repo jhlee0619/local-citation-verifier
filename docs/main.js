@@ -1,16 +1,16 @@
 // Entry module: wires the ui/ modules to core/verify.js and owns the
 // verification session (start, retry, cancel) and the user's decisions.
-import * as Bib from "./core/bibtex.js?v=20261012-s17";
-import * as Formats from "./core/formats.js?v=20261012-s17";
-import * as Net from "./core/net.js?v=20261012-s17";
-import * as Prov from "./core/providers.js?v=20261012-s17";
-import * as D from "./core/verify.js?v=20261012-s17";
-import * as Out from "./core/output.js?v=20261012-s17";
-import { $ } from "./ui/dom.js?v=20261012-s17";
-import * as Cards from "./ui/cards.js?v=20261012-s17";
-import * as Preview from "./ui/preview.js?v=20261012-s17";
-import * as Panels from "./ui/panels.js?v=20261012-s17";
-import { initCitationAudit } from "./ui/audit-view.js?v=20261012-s17";
+import * as Bib from "./core/bibtex.js?v=20261012-s18";
+import * as Formats from "./core/formats.js?v=20261012-s18";
+import * as Net from "./core/net.js?v=20261012-s18";
+import * as Prov from "./core/providers.js?v=20261012-s18";
+import * as D from "./core/verify.js?v=20261012-s18";
+import * as Out from "./core/output.js?v=20261012-s18";
+import { $ } from "./ui/dom.js?v=20261012-s18";
+import * as Cards from "./ui/cards.js?v=20261012-s18";
+import * as Preview from "./ui/preview.js?v=20261012-s18";
+import * as Panels from "./ui/panels.js?v=20261012-s18";
+import { initCitationAudit } from "./ui/audit-view.js?v=20261012-s18";
 
   const controller = D.defaultController;
   const RESOLVED = { isReviewResolved: D.isReviewResolved };
@@ -133,12 +133,43 @@ import { initCitationAudit } from "./ui/audit-view.js?v=20261012-s17";
   // ─── Run lifecycle ─────────────────────────────────────────────────
   const failedIndices = results => results.flatMap((result, index) => result?.status === "lookup_failed" ? [index] : []);
 
+  // A database that answered with a bot challenge (DBLP's "Making sure
+  // you're not a bot!") keeps doing so for a while: an entry that failed
+  // only for databases that are blocking is not retried until BLOCK_WAIT_MS
+  // after the run that met the challenge.
+  const BLOCK_WAIT_MS = 10 * 60 * 1000;
+  const block = { names: [], until: 0, timer: 0 };
+
+  function noteBlocks(results) {
+    const names = [...new Set(results.flatMap(result => result?.blocked_providers || []))];
+    if (!names.length) return;
+    clearTimeout(block.timer);
+    block.names = names;
+    block.until = Date.now() + BLOCK_WAIT_MS;
+    block.timer = setTimeout(syncRunControls, BLOCK_WAIT_MS);
+  }
+
+  const waitsForBlock = result => Date.now() < block.until && result.reason !== "proxy_missing" &&
+    result.unavailable_providers?.length > 0 && result.unavailable_providers.every(name => block.names.includes(name));
+  const retryIndices = results => failedIndices(results).filter(index => !waitsForBlock(results[index]));
+  const clockTime = ms => {
+    const at = new Date(ms);
+    return `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`;
+  };
+
   function syncRunControls() {
     const run = active()?.run;
     const failed = run ? failedIndices(run.results).length : 0;
+    const retryable = run ? retryIndices(run.results).length : 0;
+    const waiting = failed - retryable;
+    const blocking = `${block.names.join(", ")} ${block.names.length === 1 ? "is" : "are"} blocking`;
     el.retry.classList.toggle("hidden", failed === 0);
-    el.retry.disabled = failed === 0 || !run.completed;
-    el.retry.textContent = failed > 0 ? `Retry failed lookups (${failed})` : "Retry failed lookups";
+    el.retry.disabled = retryable === 0 || !run.completed;
+    el.retry.textContent = retryable > 0 ? `Retry failed lookups (${retryable})`
+      : waiting > 0 ? `${blocking} — retry after ${clockTime(block.until)}` : "Retry failed lookups";
+    el.retry.title = waiting > 0
+      ? `${waiting} failed ${waiting === 1 ? "lookup waits" : "lookups wait"}: ${blocking} automated requests with a bot check, and asking before ${clockTime(block.until)} would get the same answer.`
+      : "";
     Preview.setExportEnabled(exportAllowed());
   }
 
@@ -183,6 +214,9 @@ import { initCitationAudit } from "./ui/audit-view.js?v=20261012-s17";
     Preview.flush();
     run.completed = true;
     session.beforeRetry = null;
+    // Only the entries this run looked up: retained results keep the block
+    // they met earlier and do not restart the wait.
+    noteBlocks(indices ? indices.map(index => run.results[index]) : run.results);
     el.fill.classList.add("done");
     el.text.textContent = doneLabel || `Done — ${run.entries.length} entries verified`;
     el.cancel.classList.add("hidden");
@@ -242,7 +276,7 @@ import { initCitationAudit } from "./ui/audit-view.js?v=20261012-s17";
   function retryFailedLookups() {
     const current = active();
     if (!current?.run.completed) return;
-    const indices = failedIndices(current.run.results);
+    const indices = retryIndices(current.run.results);
     if (!indices.length) return;
     const before = current.run;
     const beforeRetry = {

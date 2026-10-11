@@ -5,9 +5,9 @@
  * operator's local vLLM server behind the proxy). DOM-free.
  * To add an engine, add one entry to ENGINES.
  */
-import * as Net from "./net.js?v=20261012-s17";
-import { normalizeEvidenceLanguage } from "./text.js?v=20261012-s17";
-import { promptInstructions } from "./versions.js?v=20261012-s17";
+import * as Net from "./net.js?v=20261012-s18";
+import { normalizeEvidenceLanguage } from "./text.js?v=20261012-s18";
+import { promptInstructions } from "./versions.js?v=20261012-s18";
 
   // ─── Rerank prompt and parsing ─────────────────────────────────────
   const ALLOWED_RISK_FLAGS = [

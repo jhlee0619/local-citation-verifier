@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Final, Protocol, TypeAlias
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qsl, unquote, urlencode, urlparse, urlunparse
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 
 from .ttl_cache import TtlByteCache
 
@@ -31,6 +31,18 @@ METADATA_CACHE_MAX_ENTRIES: Final = 256
 METADATA_CACHE_MAX_BYTES: Final = 16 * 1024 * 1024
 ARXIV_CACHE_MAX_ENTRIES: Final = 128
 ARXIV_CACHE_MAX_BYTES: Final = 8 * 1024 * 1024
+MAX_PAGE_BYTES: Final = 2 * 1024 * 1024
+# docs/core/pages.js PAGE_HOSTS: the official proceedings sites /api/page
+# fetches (the page's own URL is built there).
+PAGE_HOSTS: Final = frozenset({
+    "proceedings.neurips.cc", "papers.neurips.cc", "papers.nips.cc",
+    "proceedings.mlr.press",
+    "jmlr.org", "www.jmlr.org",
+    "aclanthology.org", "www.aclanthology.org", "www.aclweb.org", "aclweb.org",
+    "openaccess.thecvf.com",
+    "www.ijcai.org", "ijcai.org",
+})
+META_TAG_RE: Final = re.compile(r"<meta\b[^>]*>", re.IGNORECASE)
 FORWARDED_UPSTREAM_HEADERS: Final = (
     "Retry-After",
     "X-Rate-Limit-Limit",
@@ -62,6 +74,11 @@ METADATA_RESPONSE_CACHE = TtlByteCache(
     max_bytes=METADATA_CACHE_MAX_BYTES,
 )
 ARXIV_BIBTEX_CACHE = TtlByteCache(
+    ARXIV_CACHE_TTL_SECONDS,
+    max_entries=ARXIV_CACHE_MAX_ENTRIES,
+    max_bytes=ARXIV_CACHE_MAX_BYTES,
+)
+PAGE_META_CACHE = TtlByteCache(
     ARXIV_CACHE_TTL_SECONDS,
     max_entries=ARXIV_CACHE_MAX_ENTRIES,
     max_bytes=ARXIV_CACHE_MAX_BYTES,
@@ -294,3 +311,53 @@ def make_chat_payload(model: str, rerank: RerankRequest) -> JsonObject:
         "temperature": 0,
         "max_tokens": rerank.max_tokens,
     }
+
+
+def is_page_url(value: str) -> bool:
+    parsed = urlparse(value)
+    return (
+        parsed.scheme == "https"
+        and (parsed.hostname or "").lower() in PAGE_HOSTS
+        and parsed.port is None
+        and not parsed.username
+        and not parsed.password
+    )
+
+
+def parse_page_url(value: str | None) -> str:
+    url = (value or "").strip()
+    if len(url) > 512 or not is_page_url(url):
+        raise BadRequestError("url must be an official proceedings page")
+    return url
+
+
+class _PageRedirects(HTTPRedirectHandler):
+    """Follows a redirect only to another allowlisted proceedings page."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[no-untyped-def]
+        if not is_page_url(newurl):
+            raise UpstreamError("the proceedings page redirected off its site")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def fetch_page_meta(url: str, timeout_seconds: float) -> JsonObject:
+    """The page's <meta> tags: {"url": final URL, "meta": tags joined by newlines}."""
+    cached = PAGE_META_CACHE.get(url)
+    if cached is not None:
+        return json.loads(cached[1].decode("utf-8"))
+    request = Request(url, headers={"User-Agent": USER_AGENT})
+    try:
+        with build_opener(_PageRedirects).open(request, timeout=timeout_seconds) as response:
+            body = read_limited_bytes(response, MAX_PAGE_BYTES, "proceedings page")
+            answer: JsonObject = {
+                "url": response.geturl(),
+                "meta": "\n".join(META_TAG_RE.findall(body.decode("utf-8", "replace"))),
+            }
+    except HTTPError as exc:
+        raise UpstreamError(f"the proceedings page returned HTTP {exc.code}") from exc
+    except URLError as exc:
+        raise UpstreamError(f"the proceedings page is unreachable: {exc.reason}") from exc
+    except TimeoutError as exc:
+        raise UpstreamError("the proceedings page timed out") from exc
+    PAGE_META_CACHE.set(url, 200, json.dumps(answer).encode("utf-8"))
+    return answer

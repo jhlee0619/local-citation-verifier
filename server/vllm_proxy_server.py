@@ -38,6 +38,7 @@ from .proxy_core import (
     env_int,
     extract_chat_output,
     fetch_arxiv_bibtex,
+    fetch_page_meta,
     fetch_upstream,
     first_model_id,
     get_json,
@@ -45,6 +46,7 @@ from .proxy_core import (
     make_chat_payload,
     parse_arxiv_id,
     parse_json_object,
+    parse_page_url,
     parse_rerank_request,
     post_json,
     validate_proxy_path,
@@ -165,6 +167,9 @@ class CitationRequestHandler(SimpleHTTPRequestHandler):
         if self.path.startswith("/api/arxiv/bibtex"):
             self.handle_arxiv_bibtex()
             return
+        if urlparse(self.path).path == "/api/page":
+            self.handle_page()
+            return
         if self.path.startswith("/api/semanticscholar/"):
             self.handle_semanticscholar_proxy()
             return
@@ -202,6 +207,16 @@ class CitationRequestHandler(SimpleHTTPRequestHandler):
             arxiv_id = parse_arxiv_id(query.get("id", [""])[0])
             bibtex = fetch_arxiv_bibtex(arxiv_id, timeout_seconds=8.0)
             self.write_json(HTTPStatus.OK, {"id": arxiv_id, "bibtex": bibtex})
+        except BadRequestError as exc:
+            self.write_json(HTTPStatus.BAD_REQUEST, {"error": exc.message})
+        except UpstreamError as exc:
+            self.write_json(HTTPStatus.BAD_GATEWAY, {"error": exc.message})
+
+    def handle_page(self) -> None:
+        try:
+            query = parse_qs(urlparse(self.path).query)
+            url = parse_page_url(query.get("url", [""])[0])
+            self.write_json(HTTPStatus.OK, fetch_page_meta(url, timeout_seconds=8.0))
         except BadRequestError as exc:
             self.write_json(HTTPStatus.BAD_REQUEST, {"error": exc.message})
         except UpstreamError as exc:

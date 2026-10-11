@@ -194,8 +194,8 @@ const CASES = [
   // Positive controls (over-blocking).
   { name: "control-verified", group: "control", about: "entry confirmed by its own DOI",
     expect: { status: "verified", reasons: ["core_fields_match"], exit: 0, export: [] } },
-  { name: "control-missing-doi", group: "control", about: "entry lacking only the DOI the record supplies",
-    expect: { status: "updated", reasons: ["additive_only"], exit: 1, export: [] }, fix: { added: ["doi"] } },
+  { name: "control-missing-doi", group: "control", about: "entry lacking only the DOI the record supplies (offered, never applied)",
+    expect: { status: "verified", reasons: ["core_fields_match"], exit: 0, export: [], suggested: ["doi"] } },
   { name: "control-preprint-published", group: "control", about: "preprint's arXiv ID with the published version's year",
     expect: { status: "needs_review", reasons: ["identifier_record_not_auto_applicable"], ...REVIEW }, versions: true },
   { name: "control-dblp-only", fixture: "outage-dblp-only", group: "control", about: "the DBLP-only paper with DBLP answering",
@@ -251,6 +251,7 @@ for (const spec of CASES) {
     assert.deepEqual(readiness.requirements, expect.export, "export readiness");
     assert.equal(readiness.ready, expect.export.length === 0);
     if (expect.diff) assert.ok(entry.diffs.some(diff => diff.field === expect.diff), `the ${expect.diff} difference is shown`);
+    if (expect.suggested) assert.deepEqual(entry.suggested_fields, expect.suggested, "the missing fields are offered");
     if (spec.group === "fabricated") assert.ok(entry.blocking && !readiness.ready, "a fabricated reference never passes");
     if (expect.unavailable) {
       assert.deepEqual(entry.unavailable_providers, expect.unavailable, "the providers that did not answer");
