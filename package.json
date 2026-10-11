@@ -21,6 +21,9 @@
   "engines": {
     "node": ">=22.15"
   },
+  "scripts": {
+    "test": "node --test \"regression/*.test.mjs\""
+  },
   "devDependencies": {
     "@playwright/test": "1.61.1",
     "fuzzball": "2.2.3"

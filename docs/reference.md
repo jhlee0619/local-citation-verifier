@@ -8,7 +8,7 @@ Detailed behaviour, configuration and layout. The short overview is in the [READ
 
 Open <https://jhlee0619.github.io/local-citation-verifier/>. There is no server behind the published site, so:
 
-- Only Crossref, PubMed and Semantic Scholar are queried, directly from the browser.
+- Only Crossref, PubMed, Semantic Scholar and DataCite are queried, directly from the browser.
 - DBLP and OpenReview cannot be queried from a browser (CORS), and arXiv BibTeX enrichment needs the proxy. Records that only those sources carry, such as many ICLR papers, are missing as candidates. Since Semantic Scholar alone never confirms an entry, more entries end up as Needs Review (`unconfirmed_source`) here than with the local proxy.
 - Crossref's public pool allows about one search per second, so lookups are paced. A browser cannot read Crossref's rate-limit headers, so the observed limits are used: 1 search/s and 5 DOI lookups/s, one request at a time. A 100-entry file needs roughly 2–3 minutes of Crossref time.
 - PubMed (NCBI E-utilities) allows 3 requests per second without an API key. Its requests are paced one at a time, 334 ms apart until a response's `X-RateLimit-Limit` says otherwise, with a pause on HTTP 429 (`Retry-After`). This is the same on every origin.
@@ -124,7 +124,7 @@ Then start a new session and open `/hooks` to review and trust the plugin's two 
 What the plugin adds:
 
 - **Skill `citation-guard`.** Loaded whenever the agent works on references, bibliographies or citations. It obtains each reference with `lcv resolve … --bibtex` (identifier or same-work matches only), runs `lcv check --strict` and `lcv keys` after every change, and clears each finding: `lcv fix` for auto-updates, replacement by a resolved record or removal (with a visible `TODO(citation)` and a note to you) for reviews and Not Found entries, no citation of retracted works, reruns for failed lookups. It never edits `references.allow`, never runs `lcv allow` and never hand-edits fields to make a check pass.
-- **Stop hook.** When the agent tries to finish, the hook looks at the git working tree. If no `.bib`/`.ris`/`.nbib` file changed and no changed `.tex`/`.md` file contains `\cite` commands, it exits at once without network access. Otherwise it runs `lcv check --strict` on the changed bibliographies and `lcv keys` on the changed manuscripts (against their `\bibliography{}`/`\addbibresource{}` files, else every `.bib` in the repository), and blocks the end of the turn with one line per problem: `KEY — status — what to do`. If the same problems remain after three blocks, it lets the turn end and shows you what is still unverified; failed lookups block once, then warn. Bibliographies ignored by git are not seen.
+- **Stop hook.** When the agent tries to finish, the hook looks at the git working tree. If no `.bib`/`.ris`/`.nbib` file changed and no changed `.tex`/`.md` file contains `\cite` commands, it exits at once without network access. Otherwise it runs `lcv check --strict` on the changed bibliographies and `lcv keys --strict` on the changed manuscripts (against their `\bibliography{}`/`\addbibresource{}` files, else every `.bib` in the repository), and blocks the end of the turn with one line per problem: `KEY — status — what to do`. It blocks on everything those commands block on (missing keys and unparsable citation commands included) and on a citing manuscript when no bibliography file exists. It blocks at most three consecutive times for the same unresolved set; then it lets the turn end and shows you what is still unverified, so it does not guarantee that the agent makes every fix. Failed lookups block once, then warn. Bibliographies ignored by git are not seen.
 - **PreToolUse hook.** Denies agent edits of any `references.allow` and any shell command that runs `lcv allow` or writes `references.allow`.
 
 Settings (environment variables, for you, not the agent): `LCV_HOOK=off` turns the Stop hook off; `LCV_HOOK_TIMEOUT` sets its time budget in seconds (default 180, cache warm runs take seconds). Disabling or uninstalling the plugin (`/plugin`, `codex plugin remove`) removes everything.
@@ -159,10 +159,11 @@ For each entry the verifier gathers candidate records:
 - **PubMed** (NCBI E-utilities, directly from the browser, `tool=local-citation-verifier`, no e-mail address or API key, no cookies). The builders are pure functions in `docs/core/pubmed.js`. In order, stopping at the first step that finds PMIDs:
   1. one ESearch for the entry's identifiers OR-ed with the strict title term: PMID `n[uid]` (the `pmid` field, or `PMID: n` / a PubMed URL in `note` or `url`), PMCID `PMCn[pmc]`, DOI `"doi"[doi]`, and the significant title words (folded, PubMed stopwords and words under 3 characters dropped, each once, at most 10) each `[title]`, joined with AND;
   2. the relaxed term: the first 5 significant title words `[title]` AND the first author's surname `[1au]`;
-  3. ECitMatch (`journal|year|volume|first_page|first_author|key|`) when journal, volume and first page are known;
+  3. ECitMatch (`journal|year|volume|first_page|first_author|q1|`) when journal, volume and first page are known. The last field is a neutral token (`q1`) that NCBI echoes with its answer, never the citation key;
   4. one ESummary for at most 5 PMIDs. The normal case is one search and one summary per entry.
 - **Semantic Scholar.** Title match and title search.
 - **Through the proxy only.** DBLP, OpenReview, and arXiv's own BibTeX for an arXiv ID.
+- **Identifier existence.** Every DOI, arXiv ID, PMID and PMCID in the entry must exist, independently of which record matches the work. A DOI is confirmed by a Crossref record (by DOI or search), a PubMed record or DataCite; an arXiv ID by arXiv's own record or its DataCite DOI `10.48550/arXiv.<id>`; a PMID or PMCID by PubMed. When no record confirms one, it is looked up: a DOI that Crossref does not know at DataCite (`api.datacite.org/dois/{doi}`, directly from the browser on every origin, paced and cached), an arXiv ID as its DataCite DOI, a PMID by ESummary, a PMCID by ESearch.
 
 **Authoritative and discovery sources.** Crossref, PubMed, arXiv, DBLP and OpenReview are authoritative. Semantic Scholar is discovery-only, because some of its records are built from other papers' reference lists rather than from a publisher or primary source. It finds candidates, and its DOI, arXiv and DBLP identifiers fetch the authoritative records. It also feeds the AI judge's ranking and the citation audit's evidence. A Semantic Scholar record alone never verifies, auto-updates or round-trips an entry, never represents a work that an authoritative record also describes, and is never recommended by the rules (only the AI judge may recommend it). Its candidate rows carry the badge "Semantic Scholar only — not confirmed by Crossref, PubMed, arXiv, DBLP or OpenReview".
 
@@ -182,17 +183,19 @@ A network failure is never treated as absence. Timeouts, HTTP errors and a missi
 - **Plausible.** A looser relation, used only to show nearby records as choices. A plausible record is never applied.
 - **Version rules.** Which version of a work to recommend (preprint, conference, journal) is decided by a fixed rule table, R1–R24, in `docs/core/versions.js`. Every pick, including the AI judge's, must pass it. A pick that fails stays pending.
 
-Names are compared after LaTeX/Unicode folding. Particles are handled (`van der Maaten`), and a fully braced name such as `{OpenAI}` is one corporate author.
+Names are compared after LaTeX/Unicode folding. Particles are handled (`van der Maaten`), and a fully braced name such as `{OpenAI}` is one corporate author. Given names are compared word by word: two full words must be equal (`John` ≠ `James`; `Jean-Pierre` = `Jean Pierre`), an initial matches a word with that first letter (`J.` = `John`), and extra middle names or initials on one side are allowed.
+
+Titles, surnames and venues are compared in any script: LaTeX and accents are folded for Latin text, while Korean, Chinese, Japanese, Cyrillic or Greek letters are kept (`한국어 연구의 방법 2024` and `중국어 경제의 전망 2024` differ). A title whose key has no letter or fewer than two words (`2024`, `Introduction`, one unbroken run of Chinese characters) is never title evidence on its own: same work, strong match and duplicate detection then need an identifier.
 
 ### Result states
 
 | State | When |
 | --- | --- |
-| **Verified** | An authoritative record agrees with the entry's title, authors, year, venue and entry type: the record the entry's own DOI, arXiv ID, PMID or PMCID identifies, or a strong match. Fields the entry lacks (DOI, pages, volume, …) are shown as suggestions and are not applied. |
+| **Verified** | An authoritative record agrees with the entry's title, authors, year, venue and entry type: the record the entry's own DOI, arXiv ID, PMID or PMCID identifies, or a strong match. Every identifier the entry carries exists (see *Identifier existence*). Fields the entry lacks (DOI, pages, volume, …) are shown as suggestions and are not applied. |
 | **Auto-updated** | Only two cases, both from an authoritative record. **(a)** The record the entry's own DOI or arXiv ID identifies is complete, the same work, free of integrity issues and passes the version rules. It replaces the entry as one whole record. **(b) Additive only.** One strongly matching record with a DOI fills fields the entry lacks, and that DOI, looked up again at Crossref, strongly matches the entry. Existing values are never overwritten, and a conflicting volume, number, pages, publisher, DOI, PMID or PMCID blocks this case. A PubMed record may add `pmid`, `pmcid` and `doi` this way; a PubMed record without a DOI can verify an entry but never add to it. |
-| **Needs Review** | Export is blocked until you decide. Reasons include: <ul><li>`unconfirmed_source`: only Semantic Scholar lists the work; its records are shown as explicit choices, never applied;</li><li>a title, author, year, venue or entry-type change without an identifier, or a version change without an identifier;</li><li>`wrong_authors`: no record is the same work, but an authoritative one has the entry's exact title with other authors;</li><li>`wrong_year`: such a record has the same first author but another year;</li><li>`id_title_mismatch`: the entry's DOI or arXiv ID resolves to another title;</li><li>`id_conflict`: the DOI and the arXiv ID resolve to different works;</li><li>`integrity`: duplicate fields or citation keys, malformed author lists, an entry type that contradicts the venue, or identifiers that mix preprint and published versions;</li><li>records that disagree with each other, a DOI that does not round-trip, or a risk raised by the AI judge.</li></ul> |
+| **Needs Review** | Export is blocked until you decide. Reasons include: <ul><li>`unconfirmed_source`: only Semantic Scholar lists the work; its records are shown as explicit choices, never applied;</li><li>a title, author, year, venue or entry-type change without an identifier, or a version change without an identifier;</li><li>`wrong_authors`: no record is the same work, but an authoritative one has the entry's exact title with other authors;</li><li>`wrong_year`: such a record has the same first author but another year;</li><li>`id_title_mismatch`: the entry's DOI or arXiv ID resolves to another title;</li><li>`id_conflict`: the DOI and the arXiv ID resolve to different works;</li><li>`doi_unconfirmed`, `arxiv_unconfirmed`, `pmid_unconfirmed`: the work matches a record, but an identifier in the entry was looked up and does not exist (Crossref and DataCite, arXiv and DataCite, PubMed). Fix or remove it; nothing removes it automatically;</li><li>`integrity`: duplicate fields or citation keys, malformed author lists, an entry type that contradicts the venue, or identifiers that mix preprint and published versions;</li><li>records that disagree with each other, a DOI that does not round-trip, or a risk raised by the AI judge.</li></ul> |
 | **Not Found** | No record is the same work. Nearby plausible records are shown as explicit choices only. |
-| **Lookup failed** | The databases did not answer (rate limit, outage, deadline) or the proxy is missing (`proxy_missing`: nothing was asked). The entry stays pending. Use **Retry failed lookups**, or decide explicitly. |
+| **Lookup failed** | The databases did not answer (rate limit, outage, deadline), an identifier lookup failed (`identifier_lookup_failed`: a failure never counts as "not found"), or the proxy is missing (`proxy_missing`: nothing was asked). The entry stays pending. Use **Retry failed lookups**, or decide explicitly. |
 | **Duplicate** | Another entry cites the same paper (same DOI, arXiv ID, or normalised title plus first author). |
 
 **Lint notes.** Small notes on a card point out problems in the entry's own fields. They never change its status (integrity issues do): a four-digit year in the citation key that differs from `year` (`key_year_mismatch`), an `@inproceedings`/`@conference` whose booktitle or journal is an arXiv/preprint server (`inproceedings_arxiv_venue`), "and others" / "et al." in `author` (`author_placeholder`), an `@article`/`@inproceedings`/`@conference` without DOI, PMID, PMCID or arXiv ID (`missing_identifier`), and an `@article` without `journal` or an `@inproceedings` without `booktitle` (`missing_venue`).
@@ -224,6 +227,8 @@ Copy and Download run the same preflight, and nothing reaches the clipboard or a
 ### Whole records, never merged fields
 
 When Crossref, PubMed, Semantic Scholar, DBLP, OpenReview or arXiv describe the same work differently, each stays a separate whole record. Choosing one applies its title, authors, year, venue and identifiers together. The verifier never combines a title from one source with authors from another. The only exception is the additive-only update above: it fills fields the entry lacks, from exactly one record, and never replaces a value.
+
+A record that replaces an entry (the identifier auto-update or your choice) brings all bibliographic fields (title, author, editor, year, month, journal, booktitle, volume, number, pages, publisher, address, edition, series, chapter, institution, school, organization, howpublished, type, doi, url, eprint, archiveprefix, primaryclass, eprinttype, pmid, pmcid, isbn, issn, language, urldate, and their biblatex counterparts such as date, journaltitle or location); the entry's own values of those fields are dropped, never mixed in. Your annotation fields that the record does not define stay as they are and show as unchanged lines in the preview: `note`, `annote`, `annotation`, `keywords`, `abstract`, `file`, `comment(s)`, `groups`, `owner`, `timestamp`, `mendeley-tags`, `readstatus`, `priority`, `ranking`, `x-*` and any other custom field.
 
 ## BibTeX handling
 
@@ -268,8 +273,8 @@ Paste or upload a `.bib` file (or reuse the verifier's) and a manuscript in plai
 - **Verdicts are limited to the abstract.**
   - The labels are **Supported by the abstract**, **Partially supported** and **Not stated in the abstract**.
   - **Insufficient evidence** always comes with a reason: AI off, AI unavailable, lookup failed, no abstract/TLDR, paper not found, evidence mismatch, invalid AI output, abstract too thin, or key not in the BibTeX file.
-  - The model's quote must occur verbatim in the abstract. Otherwise it is dropped and "supported" becomes "partially supported".
-  - A sentence citing several papers also gets a combined verdict.
+  - The model's quote must occur verbatim in the abstract. Otherwise it is dropped and "supported" becomes "partially supported" (`unverified_quote`); a "supported" answer without any quote becomes "partially supported" too (`missing_quote`).
+  - A sentence citing several papers also gets a combined verdict: supported only if at least one reference supports it; partial support from several references stays partially supported.
 - **Report.** The Markdown report escapes all quoted text. The audit has its own engine selector (Off by default) and its own Cancel, independent of verification runs.
 
 ## Privacy
@@ -282,11 +287,12 @@ What leaves the browser:
 | --- | --- | --- |
 | Static files | The site's own origin (GitHub Pages or your proxy) | Page load |
 | Title, first three author surnames, venue, year; DOIs; arXiv IDs | Crossref (`api.crossref.org`), Semantic Scholar (`api.semanticscholar.org`). Through the proxy also `dblp.org`, `api2.openreview.net`, `arxiv.org` | Verification and audit lookups. Directly from the browser on Pages, via `/api/*` locally |
-| Significant title words, first-author surname; DOI, PMID, PMCID; for ECitMatch also journal, year, volume, first page, first author's initials and the citation key | PubMed (NCBI E-utilities, `eutils.ncbi.nlm.nih.gov`) | Verification lookups, directly from the browser on every origin (no proxy route), without cookies |
+| Significant title words, first-author surname; DOI, PMID, PMCID; for citation matching (ECitMatch) also journal, year, volume, first page and the first author's initials, with the neutral token `q1` in place of the citation key | PubMed (NCBI E-utilities, `eutils.ncbi.nlm.nih.gov`) | Verification lookups, directly from the browser on every origin (no proxy route), without cookies |
+| DOIs (an arXiv ID as its DOI `10.48550/arXiv.<id>`) | DataCite (`api.datacite.org`) | Only for an identifier of the entry that no other record confirms; directly from the browser on every origin, without cookies |
 | An entry plus up to three candidate records | Your vLLM server, via the proxy | Only with the verifier's AI opt-in, for ambiguous entries |
 | The citation key, the cited sentence, the BibTeX metadata of the cited entry and the abstract/TLDR found | Your vLLM server, via the proxy | Only when the audit's AI judge is set to vLLM |
 
-No request carries an e-mail address or `mailto` parameter; PubMed requests name the tool (`tool=local-citation-verifier`) and carry no API key. The proxy identifies itself as `local-citation-verifier/1.0`. A Semantic Scholar API key, if set, stays on the proxy and is sent only to Semantic Scholar. The CSP limits the page's connections to its own origin plus `api.crossref.org`, `api.semanticscholar.org`, `dblp.org` and `eutils.ncbi.nlm.nih.gov`, and allows scripts from its own origin only.
+No request carries an e-mail address or `mailto` parameter; PubMed requests name the tool (`tool=local-citation-verifier`) and carry no API key. The proxy identifies itself as `local-citation-verifier/1.0`. A Semantic Scholar API key, if set, stays on the proxy and is sent only to Semantic Scholar. No citation key, note, abstract field or manuscript text goes to a database. The CSP limits the page's connections to its own origin plus `api.crossref.org`, `api.semanticscholar.org`, `dblp.org`, `eutils.ncbi.nlm.nih.gov` and `api.datacite.org`, and allows scripts from its own origin only.
 
 ## Repository layout
 
@@ -315,14 +321,15 @@ No request carries an e-mail address or `mailto` parameter; PubMed requests name
 | `.codex-plugin/`, `.agents/plugins/`, `hooks/codex-hooks.json` | Codex plugin manifest, marketplace and hooks |
 | `server/` | `vllm_proxy_server.py` (static files, `/api/*`, Host/Origin checks), `proxy_core.py` (upstream fetch, cache), `bind_policy.py` (bind, Host and Origin policy) |
 | `scripts/` | `release-manifest.js` and `post-deploy-smoke.js` (release gate), `run_local.py` |
+| `regression/` | The public verdict regression suite (`npm test`): synthetic bibliographies and service answers, `lcv check --strict` and export readiness without network |
 
 ## Development
 
-Node ≥ 22.15 and Python ≥ 3.10. No build step: `docs/` is native ES modules. The test suites and the fabricated-reference evaluation are maintained outside this repository; for a live check of a `.bib` file use `lcv check` (see [`cli/README.md`](../cli/README.md)).
+Node ≥ 22.15 and Python ≥ 3.10. No build step: `docs/` is native ES modules. `npm test` runs the public verdict regression suite ([`regression/`](../regression/README.md), no network); the larger test suites and the fabricated-reference evaluation are maintained outside this repository. For a live check of a `.bib` file use `lcv check` (see [`cli/README.md`](../cli/README.md)).
 
 ## Release operations
 
-CI and the GitHub Pages deployment call the same reusable release workflow (the test suites run before publishing, outside this repository):
+CI and the GitHub Pages deployment call the same reusable release workflow, which runs the public verdict regression suite before packaging (the larger test suites run before publishing, outside this repository):
 
 1. One SHA-named artifact is packaged with a canonical file manifest.
 2. The manifest is verified after download, and those exact bytes are deployed.

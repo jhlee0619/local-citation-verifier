@@ -72,7 +72,7 @@ CSP_POLICY: Final = (
     "frame-ancestors 'none'; "
     "form-action 'self'; "
     "script-src 'self'; "
-    "connect-src 'self' https://api.crossref.org https://api.semanticscholar.org https://dblp.org https://eutils.ncbi.nlm.nih.gov; "
+    "connect-src 'self' https://api.crossref.org https://api.semanticscholar.org https://dblp.org https://eutils.ncbi.nlm.nih.gov https://api.datacite.org; "
     "img-src 'self' data:; "
     "style-src 'self' 'unsafe-inline'; "
     "font-src 'self' data:"

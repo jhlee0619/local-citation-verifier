@@ -5,12 +5,12 @@
  * clicks and typing on a card report through the actions main.js passes to
  * bindCardEvents and only restyle the row they touch.
  */
-import { html, setHTML, safeUrl } from "./dom.js?v=20261011-s14";
-import { entryVenue, stripLatex } from "../core/text.js?v=20261011-s14";
-import { DBLP_API, ON_GITHUB_PAGES, OPENREVIEW_API } from "../core/providers.js?v=20261011-s14";
-import * as Rec from "../core/records.js?v=20261011-s14";
-import * as D from "../core/verify.js?v=20261011-s14";
-import * as Out from "../core/output.js?v=20261011-s14";
+import { html, setHTML, safeUrl } from "./dom.js?v=20261012-s15";
+import { entryVenue, stripLatex } from "../core/text.js?v=20261012-s15";
+import { DBLP_API, ON_GITHUB_PAGES, OPENREVIEW_API } from "../core/providers.js?v=20261012-s15";
+import * as Rec from "../core/records.js?v=20261012-s15";
+import * as D from "../core/verify.js?v=20261012-s15";
+import * as Out from "../core/output.js?v=20261012-s15";
 
   // ─── Hint text ─────────────────────────────────────────────────────
   const PROVIDER_NAMES = ["CrossRef", "PubMed", "Semantic Scholar", ...(DBLP_API ? ["DBLP"] : []), ...(OPENREVIEW_API ? ["OpenReview"] : [])];
@@ -49,6 +49,9 @@ import * as Out from "../core/output.js?v=20261011-s14";
         id_conflict: "Your entry's DOI and arXiv ID point to different works. Keep the identifier that belongs to the cited paper.",
         doi_conflict: "The matching record has a different DOI than your entry.",
         pmid_conflict: "Your entry's PMID or PMCID belongs to no record, while the matching record has another one.",
+        doi_unconfirmed: "The work matches the record below, but the DOI in your entry could not be found (Crossref, DataCite): fix or remove it.",
+        arxiv_unconfirmed: "The work matches the record below, but the arXiv ID in your entry could not be found (arXiv, DataCite): fix or remove it.",
+        pmid_unconfirmed: "The work matches the record below, but the PMID or PMCID in your entry could not be found in PubMed: fix or remove it.",
         core_conflict: "The databases disagree about this work's title, authors or year. Choose one complete record, or keep yours.",
         version_change_without_id: "Another version of this work was found (preprint vs. published). Your entry has no DOI or arXiv ID that settles which one you cite, so choose a version or keep yours.",
         core_change_without_id: "A record of this work differs from your entry in authors, year, venue or type, and your entry has no DOI or arXiv ID to confirm it. Compare the fields below and choose.",
@@ -85,6 +88,9 @@ import * as Out from "../core/output.js?v=20261011-s14";
         id_conflict: "항목의 DOI와 arXiv ID가 서로 다른 논문을 가리킵니다. 인용한 논문의 식별자만 남기세요.",
         doi_conflict: "일치하는 기록의 DOI가 항목의 DOI와 다릅니다.",
         pmid_conflict: "항목의 PMID 또는 PMCID에 해당하는 기록이 없고, 일치하는 기록에는 다른 값이 있습니다.",
+        doi_unconfirmed: "논문은 아래 기록과 일치하지만 항목의 DOI를 찾을 수 없습니다(Crossref, DataCite). DOI를 고치거나 지우세요.",
+        arxiv_unconfirmed: "논문은 아래 기록과 일치하지만 항목의 arXiv ID를 찾을 수 없습니다(arXiv, DataCite). 고치거나 지우세요.",
+        pmid_unconfirmed: "논문은 아래 기록과 일치하지만 항목의 PMID 또는 PMCID를 PubMed에서 찾을 수 없습니다. 고치거나 지우세요.",
         core_conflict: "데이터베이스마다 이 논문의 제목·저자·연도가 다릅니다. 완전한 기록 하나를 고르거나 원래 값을 유지하세요.",
         version_change_without_id: "이 논문의 다른 버전(프리프린트/출판본)이 있습니다. 항목에 어느 쪽인지 정할 DOI나 arXiv ID가 없으니 버전을 고르거나 원래 값을 유지하세요.",
         core_change_without_id: "이 논문의 기록이 항목과 저자·연도·venue·유형에서 다르고, 항목에 이를 확인할 DOI나 arXiv ID가 없습니다. 아래 필드를 비교해 선택하세요.",

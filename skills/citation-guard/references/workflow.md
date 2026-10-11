@@ -45,7 +45,7 @@ The approval is stored in `references.allow` next to the bibliography, bound to 
 
 ## Hooks (Claude Code and Codex plugins)
 
-- **Stop**: when the session's git working tree has changed or new `.bib`/`.ris`/`.nbib` files, or changed `.tex`/`.md` files with citation commands, the hook runs `lcv check --strict` (and `lcv keys` for the changed manuscripts) and blocks the end of the turn with a list of `KEY — status — action`. Fix the entries as above; do not try to get around the hook. After three unchanged blocks it lets the turn end and shows the user what is still unverified.
+- **Stop**: when the session's git working tree has changed or new `.bib`/`.ris`/`.nbib` files, or changed `.tex`/`.md` files with citation commands, the hook runs `lcv check --strict` (and `lcv keys --strict` for the changed manuscripts) and blocks the end of the turn with a list of `KEY — status — action`, also for unparsable citation commands and for a citing manuscript without any bibliography file. Fix the entries as above; do not try to get around the hook. It blocks at most three consecutive times for the same unresolved set; then it lets the turn end with a visible warning listing what is still unverified. That is not a pass: finish the fixes or report what is left.
 - **PreToolUse**: edits of `references.allow` and `lcv allow` commands are denied.
 - The human can turn the Stop hook off with `LCV_HOOK=off`; an agent must not.
 

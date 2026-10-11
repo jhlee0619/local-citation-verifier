@@ -33,7 +33,7 @@
  * parseBib(text) is the lenient reader (provider snippets, citation audit):
  * it keeps what it can read of a malformed entry and resynchronises after it.
  */
-import { decodeHtmlEntities, matchingBrace, unicodeToLatex } from "./text.js?v=20261011-s14";
+import { decodeHtmlEntities, matchingBrace, unicodeToLatex } from "./text.js?v=20261012-s15";
 
   const MONTHS = ["January", "February", "March", "April", "May", "June", "July",
     "August", "September", "October", "November", "December"];

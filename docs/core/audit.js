@@ -6,12 +6,12 @@
  * run and the Markdown report. DOM-free; ui/audit-view.js wires it to the
  * page.
  */
-import * as Net from "./net.js?v=20261011-s14";
-import * as Judge from "./judge.js?v=20261011-s14";
-import { normalizeEvidenceLanguage, safeExternalUrl } from "./text.js?v=20261011-s14";
-import { sourceWarnings, ssToStandard, SS_MATCH, SS_PAPER } from "./providers.js?v=20261011-s14";
-import { sameWork } from "./records.js?v=20261011-s14";
-import { defaultController } from "./verify.js?v=20261011-s14";
+import * as Net from "./net.js?v=20261012-s15";
+import * as Judge from "./judge.js?v=20261012-s15";
+import { normalizeEvidenceLanguage, safeExternalUrl } from "./text.js?v=20261012-s15";
+import { sourceWarnings, ssToStandard, SS_MATCH, SS_PAPER } from "./providers.js?v=20261012-s15";
+import { sameWork } from "./records.js?v=20261012-s15";
+import { defaultController } from "./verify.js?v=20261012-s15";
 
   const SS_EVIDENCE_FIELDS = "title,abstract,tldr,authors,year,venue,publicationVenue,externalIds,url";
 
@@ -571,9 +571,14 @@ import { defaultController } from "./verify.js?v=20261011-s14";
 
   // The model's quote must occur in the evidence text, ignoring case and
   // whitespace. A quote that does not is dropped and flagged
-  // unverified_quote, which downgrades supported to weak.
+  // unverified_quote, which downgrades supported to weak; "supported"
+  // without any quote is flagged missing_quote and downgraded the same way.
   function verifyEvidenceQuote(judgement, evidence) {
     const quote = String(judgement.evidenceQuote || "").replace(QUOTE_EDGES, "").replace(/^(?:\.\.\.|…)\s*|\s*(?:\.\.\.|…)$/g, "");
+    if (!quote && judgement.verdict === "supported") {
+      const riskFlags = [...new Set([...(judgement.riskFlags || []), "missing_quote"])];
+      return applyRiskFlagGuardrails({ ...judgement, evidenceQuote: "", riskFlags });
+    }
     if (!quote) return { ...judgement, evidenceQuote: "" };
     const evidenceText = comparable([evidence?.tldr, evidence?.abstract].filter(Boolean).join("\n"));
     if (evidenceText.includes(comparable(quote))) return { ...judgement, evidenceQuote: quote };
@@ -654,14 +659,14 @@ import { defaultController } from "./verify.js?v=20261011-s14";
   const insufficientReasonLabel = code => INSUFFICIENT_REASONS[code] || "";
   const skipReasonLabel = code => SKIP_REASONS[code] || code;
 
-  // One verdict for a sentence citing several references: Supported if any
-  // reference supports it or at least two partially support it; otherwise
-  // Partially supported if any does; otherwise Not stated in the abstracts,
-  // but only when every reference was judged. There is no Contradicted
-  // class yet.
+  // One verdict for a sentence citing several references: Supported only if
+  // at least one reference supports it (partial support from several
+  // references never adds up to support); otherwise Partially supported if
+  // any does; otherwise Not stated in the abstracts, but only when every
+  // reference was judged. There is no Contradicted class yet.
   function combineVerdicts(verdicts) {
     const count = verdict => verdicts.filter(item => item === verdict).length;
-    if (count("supported") > 0 || count("weak") >= 2) return "supported";
+    if (count("supported") > 0) return "supported";
     if (count("weak") > 0) return "weak";
     if (verdicts.length > 0 && count("unsupported") === verdicts.length) return "unsupported";
     return "insufficient_evidence";

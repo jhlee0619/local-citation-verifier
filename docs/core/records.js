@@ -6,12 +6,12 @@
 import {
   abbreviateVenue, arxivIdInText, authorCountsCompatible, authorIntegrityIssues, authorKeys,
   authorListsEquivalent, compareAuthors, coreSignature, entryDoi, entryPmcid, entryPmid, entryVenue,
-  extractArxivId, extractOpenReviewForumId, firstAuthorSurname, foldText, hasTruncatedAuthorMarker,
-  isConferenceVenueName, isCorrectionTitle, isPlaceholderPages, isPreprintVenue, MIN_TITLE_SIM,
-  normalizeArxivId, normalizeDoi, normalizePages, normalizePmcid, normalizePmid, noticeClass, parseYear,
-  present, safeExternalUrl, sameCanonicalPaperUrl, shouldSuppressAuthorSuggestion, TITLE_MATCH_THRESHOLD,
-  titleKey, titleSimilarity, tokenSortRatio, venueEquivalent, venueKey,
-} from "./text.js?v=20261011-s14";
+  extractArxivId, extractOpenReviewForumId, firstAuthorsCompatible, firstAuthorSurname, foldText,
+  hasTruncatedAuthorMarker, isConferenceVenueName, isCorrectionTitle, isPlaceholderPages, isPreprintVenue,
+  keySimilarity, MIN_TITLE_SIM, normalizeArxivId, normalizeDoi, normalizePages, normalizePmcid, normalizePmid,
+  noticeClass, parseYear, present, safeExternalUrl, sameCanonicalPaperUrl, shouldSuppressAuthorSuggestion,
+  TITLE_MATCH_THRESHOLD, titleIsSpecific, titleKey, titleSimilarity, tokenSortRatio, venueEquivalent, venueKey,
+} from "./text.js?v=20261012-s15";
 
   // ─── Fields ────────────────────────────────────────────────────────
   const COMPARED_FIELDS = [
@@ -180,6 +180,43 @@ import {
     const originalPmcid = entryPmcid(original);
     if (originalPmcid && entryPmcid(candidate) === originalPmcid) kinds.push("pmcid");
     return kinds;
+  }
+
+  // ─── Identifier confirmation ───────────────────────────────────────
+  // Every identifier the entry carries must exist, whichever record confirms
+  // the work: a DOI at its registration agency (a Crossref record by DOI or
+  // search, a PubMed record, or DataCite), an arXiv ID in arXiv's own record
+  // (the arXiv BibTeX through the proxy) or as its DataCite DOI
+  // 10.48550/arXiv.<id>, a PMID or PMCID in PubMed.
+  const IDENTIFIER_SOURCES = Object.freeze({
+    doi: new Set(["crossref_doi", "crossref_search", "pubmed", "datacite"]),
+    arxiv: new Set(["local_arxiv", "datacite"]),
+    pmid: new Set(["pubmed"]),
+    pmcid: new Set(["pubmed"]),
+  });
+  const IDENTIFIER_OF = Object.freeze({ doi: entryDoi, arxiv: extractArxivId, pmid: entryPmid, pmcid: entryPmcid });
+
+  function confirmsIdentifier(record, kind, id) {
+    const source = record?._recordSource || "";
+    if (IDENTIFIER_SOURCES[kind].has(source) && IDENTIFIER_OF[kind](record) === id) return true;
+    // arXiv's own record of an arXiv ID confirms that ID's DOI.
+    const arxiv = kind === "doi" ? arxivIdInText(id) : "";
+    return !!arxiv && source === "local_arxiv" && extractArxivId(record) === arxiv;
+  }
+
+  // One state per identifier the entry carries, [{ kind, id, state, record }]:
+  // "confirmed" when a pooled record (`records`) or a provider check confirms
+  // it, else the check's "absent" (definitively not there) or "failed" (the
+  // lookup failed), else "unchecked". `checks` maps kind → { id, state,
+  // record } (providers.searchCandidatePool: identifiers); record is the one
+  // the check found (DataCite, PubMed), if any.
+  function identifierStates(entry, records = [], checks = {}) {
+    return Object.entries(IDENTIFIER_OF).map(([kind, idOf]) => ({ kind, id: idOf(entry) })).filter(item => item.id)
+      .map(({ kind, id }) => {
+        const check = checks?.[kind]?.id === id ? checks[kind] : null;
+        const confirmed = (records || []).some(record => confirmsIdentifier(record, kind, id)) || check?.state === "confirmed";
+        return { kind, id, state: confirmed ? "confirmed" : check?.state || "unchecked", record: check?.record || null };
+      });
   }
 
   function sourcePriority(source, kind) {
@@ -521,6 +558,22 @@ import {
   }
 
   // ─── Applying a candidate ──────────────────────────────────────────
+  // Fields that describe the work (BibTeX and biblatex): a chosen record
+  // brings its own, the entry's are dropped, never mixed in. Every other
+  // field is the user's annotation (note, annote, keywords, abstract, file,
+  // groups, owner, timestamp, x-*, custom fields …) and stays unless the
+  // record defines it.
+  const BIBLIOGRAPHIC_FIELDS = new Set([
+    "title", "author", "editor", "year", "month", "journal", "booktitle", "volume", "number", "pages",
+    "publisher", "address", "edition", "series", "chapter", "institution", "school", "organization",
+    "howpublished", "type", "doi", "url", "eprint", "archiveprefix", "primaryclass", "eprinttype", "pmid",
+    "pmcid", "isbn", "issn", "language", "urldate",
+    // biblatex names for the same data, and cross-references that pull it in
+    "date", "journaltitle", "issuetitle", "subtitle", "titleaddon", "maintitle", "booksubtitle", "eventtitle",
+    "eventdate", "venue", "location", "issue", "part", "eid", "pubstate", "version", "eprintclass", "origdate",
+    "shorttitle", "shortjournal", "bookauthor", "translator", "pagetotal", "crossref", "xref",
+  ]);
+
   function applyCandidateToEntry(original, candidate) {
     const candidateType = candidate?.ENTRYTYPE || (candidate?.booktitle
       ? "inproceedings"
@@ -533,6 +586,12 @@ import {
       if (field.startsWith("_") || field === "ID") continue;
       if (!value) continue;
       out[field] = value;
+    }
+    const defined = new Set(Object.keys(out).map(field => field.toLowerCase()));
+    for (const [field, value] of Object.entries(original || {})) {
+      const name = field.toLowerCase();
+      if (field.startsWith("_") || field === "ID" || field === "ENTRYTYPE" || BIBLIOGRAPHIC_FIELDS.has(name) || defined.has(name)) continue;
+      if (present(value)) out[field] = value;
     }
     if ((out.ENTRYTYPE || "").toLowerCase() === "inproceedings" && out.booktitle)
       delete out.journal;
@@ -633,7 +692,8 @@ import {
     if (arxivId) keys.push(`arxiv:${arxivId}`);
     const pmid = entryPmid(entry);
     if (pmid) keys.push(`pmid:${pmid}`);
-    const title = titleKey(entry.title);
+    // A title is a duplicate key only when it is specific (titleIsSpecific).
+    const title = titleIsSpecific(entry.title) ? titleKey(entry.title) : "";
     const firstAuthor = firstAuthorSurname(entry.author);
     if (title && firstAuthor) keys.push(`title:${title}|author:${firstAuthor}`);
     return keys;
@@ -844,7 +904,7 @@ import {
     const venue = entryVenue(entry);
     if (!venue) return "journal";
     const abbreviated = String(abbreviateVenue(venue) || venue);
-    const compact = venueKey(abbreviated).replace(/[^a-z0-9]+/g, "");
+    const compact = venueKey(abbreviated).replace(/\s+/g, "");
     return compact || "journal";
   }
 
@@ -1020,10 +1080,10 @@ import {
   }
 
   // Same work: a shared DOI, PMID or PMCID, or a shared arXiv ID (R20), or a
-  // title at least TITLE_MATCH_THRESHOLD similar with the same first-author
-  // surname and a year within R7. A correction or retraction notice (by its
-  // title, Crossref's update-to or PubMed's publication type) is never the
-  // same work as the article it concerns.
+  // specific title (titleIsSpecific) at least TITLE_MATCH_THRESHOLD similar
+  // with the same first-author surname and a year within R7. A correction or
+  // retraction notice (by its title, Crossref's update-to or PubMed's
+  // publication type) is never the same work as the article it concerns.
   function sameWork(a, b) {
     if (!a || !b) return false;
     if (recordNoticeClass(a) !== recordNoticeClass(b)) return false;
@@ -1035,6 +1095,7 @@ import {
     if (pmcid && pmcid === entryPmcid(b)) return true;
     const arxiv = extractArxivId(a);
     if (arxiv && arxiv === extractArxivId(b)) return true;
+    if (!titleIsSpecific(a.title) || !titleIsSpecific(b.title)) return false;
     if (titleSimilarity(a.title, b.title) < TITLE_MATCH_THRESHOLD) return false;
     const first = firstAuthorSurname(a.author);
     if (!first || first !== firstAuthorSurname(b.author)) return false;
@@ -1080,23 +1141,27 @@ import {
     return sameCoreSignature(records);
   }
 
-  // The same title after normalisation (or token-sort ≥ 97), same notice class.
+  // The same specific title (titleIsSpecific) after normalisation (or
+  // token-sort ≥ 97), same notice class.
   function sameTitle(entry, record) {
     const a = titleKey(entry?.title);
     const b = titleKey(record?.title);
     if (!a || !b || recordNoticeClass(entry) !== recordNoticeClass(record)) return false;
-    return a === b || tokenSortRatio(a, b) >= STRONG_TITLE_SIMILARITY;
+    if (!titleIsSpecific(entry?.title)) return false;
+    return a === b || keySimilarity(a, b) >= STRONG_TITLE_SIMILARITY;
   }
 
   // Strong match: the title is equal after normalisation (or token-sort ≥ 97),
-  // the first-author surname is the same, the author counts are compatible,
-  // the year is the same (R7 for preprint → published), the venues do not
-  // conflict, and the record's same-work core signature is the only one among
-  // the candidates of its version class.
+  // the first author is the same person (surname and compatible given
+  // names), the author counts are compatible, the year is the same (R7 for
+  // preprint → published), the venues do not conflict, and the record's
+  // same-work core signature is the only one among the candidates of its
+  // version class.
   function strongMatch(entry, record, candidates = []) {
     if (!entry || !record || !sameTitle(entry, record)) return false;
     const first = firstAuthorSurname(entry.author);
     if (!first || first !== firstAuthorSurname(record.author)) return false;
+    if (!firstAuthorsCompatible(entry.author, record.author)) return false;
     if (!authorCountsCompatible(entry.author, record.author)) return false;
     if (!strongYearMatch(entry, record)) return false;
     if (venueConflict(entry, record)) return false;
@@ -1109,16 +1174,17 @@ import {
 
   // A record with the entry's exact, specific title (sameTitle, ≥ 3 tokens)
   // that is still not the same work: "wrong_authors" when the first authors
-  // differ, "wrong_year" when the first author agrees but the years fail R7
-  // (in practice more than one year apart); "" otherwise. Such a record is a
-  // reason to review the citation, never a match.
+  // differ (surname, or incompatible given names), "wrong_year" when the
+  // first author agrees but the years fail R7 (in practice more than one
+  // year apart); "" otherwise. Such a record is a reason to review the
+  // citation, never a match.
   function titleOnlyMatch(entry, record) {
     if (!entry || !record || !sameTitle(entry, record) || titleTokenCount(entry.title) < 3) return "";
     if (sameWork(entry, record)) return "";
     const a = firstAuthorSurname(entry.author);
     const b = firstAuthorSurname(record.author);
     if (!a || !b) return "";
-    if (a !== b) return "wrong_authors";
+    if (a !== b || !firstAuthorsCompatible(entry.author, record.author)) return "wrong_authors";
     return yearDriftOk(entry, record) ? "" : "wrong_year";
   }
 
@@ -1164,7 +1230,7 @@ import {
   function coreComparison(entry, record) {
     const conflicts = [];
     const missing = [];
-    if (!present(record?.title) || titleKey(entry?.title) !== titleKey(record.title)) conflicts.push("title");
+    if (!present(record?.title) || !titleKey(entry?.title) || titleKey(entry?.title) !== titleKey(record.title)) conflicts.push("title");
     if (!present(record?.author) || !authorListsEquivalent(entry?.author, record.author)) conflicts.push("author");
     const year = parseYear(entry?.year);
     if (!Number.isInteger(year) || (year !== parseYear(record?.year) && year !== parseYear(record?._onlineYear)))
@@ -1476,6 +1542,7 @@ export {
   coreSignatures,
   sameCoreSignature,
   directLinkKinds,
+  identifierStates,
   selectCanonical,
   userProvenance,
   manualProvenance,

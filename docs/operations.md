@@ -14,7 +14,7 @@ Protect the `github-pages` environment with the repository's normal release appr
 
 ## Release gate
 
-Every forward release and rollback passes through the same reusable workflow (`.github/workflows/quality.yml`). The test suites run before publishing, outside this repository; the workflow checks the exact source commit (a full SHA on `main`, no symbolic links under `docs/`) and then creates a Pages artifact.
+Every forward release and rollback passes through the same reusable workflow (`.github/workflows/quality.yml`). The larger test suites run before publishing, outside this repository; the workflow checks the exact source commit (a full SHA on `main`, no symbolic links under `docs/`), runs the public verdict regression suite (`regression/`) and then creates a Pages artifact.
 
 The artifact contains a canonical `_release/manifest.json` with the source commit, `docs` tree ID, byte size, and SHA-256 for every published file. A separate job downloads the artifact, rejects unsafe archive paths and links, extracts it without restoring archive ownership or permissions, and verifies every byte against the manifest. The deploy job consumes that verified artifact without checking out or rebuilding source.
 

@@ -1,0 +1,43 @@
+{
+  "crossref": [
+    {
+      "DOI": "10.5555/kjsr.2024.0001",
+      "URL": "https://doi.org/10.5555/kjsr.2024.0001",
+      "type": "journal-article",
+      "title": [
+        "합성 데이터 경제의 장기 전망 분석"
+      ],
+      "author": [
+        {
+          "given": "Seoyeon",
+          "family": "Han"
+        },
+        {
+          "given": "Jiwoo",
+          "family": "Bae"
+        }
+      ],
+      "container-title": [
+        "Korean Journal of Synthetic Records"
+      ],
+      "issued": {
+        "date-parts": [
+          [
+            2024
+          ]
+        ]
+      },
+      "published-print": {
+        "date-parts": [
+          [
+            2024
+          ]
+        ]
+      },
+      "volume": "7",
+      "issue": "1",
+      "page": "1-15",
+      "publisher": "Example Press"
+    }
+  ]
+}

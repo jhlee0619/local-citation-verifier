@@ -1,0 +1,23 @@
+{
+  "dblp": [
+    {
+      "authors": {
+        "author": [
+          {
+            "text": "Oriel Vance"
+          },
+          {
+            "text": "Cosima Brandt"
+          }
+        ]
+      },
+      "title": "Analytical Engines for Synthetic Bibliographies.",
+      "venue": "Journal of Example Engines",
+      "year": "2024",
+      "volume": "7",
+      "pages": "1-20",
+      "type": "Journal Articles",
+      "key": "journals/jee/VanceB24"
+    }
+  ]
+}

@@ -1,0 +1,38 @@
+{
+  "crossref": [
+    {
+      "DOI": "10.5555/exl.2020.0010",
+      "URL": "https://doi.org/10.5555/exl.2020.0010",
+      "type": "journal-article",
+      "title": [
+        "Lattice Methods for Example Scheduling Problems"
+      ],
+      "author": [
+        {
+          "given": "James",
+          "family": "Smith"
+        }
+      ],
+      "container-title": [
+        "Example Letters"
+      ],
+      "issued": {
+        "date-parts": [
+          [
+            2020
+          ]
+        ]
+      },
+      "published-print": {
+        "date-parts": [
+          [
+            2020
+          ]
+        ]
+      },
+      "volume": "3",
+      "page": "10-19",
+      "publisher": "Example Press"
+    }
+  ]
+}

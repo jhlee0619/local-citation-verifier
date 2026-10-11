@@ -1,0 +1,86 @@
+{
+  "crossref": [
+    {
+      "DOI": "10.5555/jsr.2021.0101",
+      "URL": "https://doi.org/10.5555/jsr.2021.0101",
+      "type": "journal-article",
+      "title": [
+        "Calibrated Ensembles for Synthetic Citation Graphs"
+      ],
+      "author": [
+        {
+          "given": "Petra",
+          "family": "Quill"
+        },
+        {
+          "given": "Tobias",
+          "family": "Marlow"
+        },
+        {
+          "given": "Lucia",
+          "family": "Ferreira"
+        }
+      ],
+      "container-title": [
+        "Journal of Synthetic Records"
+      ],
+      "issued": {
+        "date-parts": [
+          [
+            2021
+          ]
+        ]
+      },
+      "published-print": {
+        "date-parts": [
+          [
+            2021
+          ]
+        ]
+      },
+      "volume": "12",
+      "issue": "3",
+      "page": "101-118",
+      "publisher": "Example Press"
+    },
+    {
+      "DOI": "10.5555/tes.2019.0055",
+      "URL": "https://doi.org/10.5555/tes.2019.0055",
+      "type": "journal-article",
+      "title": [
+        "Sparse Retrieval Baselines for Bibliography Repair"
+      ],
+      "author": [
+        {
+          "given": "Nnamdi",
+          "family": "Okafor"
+        },
+        {
+          "given": "Sofia",
+          "family": "Lindgren"
+        }
+      ],
+      "container-title": [
+        "Transactions on Example Systems"
+      ],
+      "issued": {
+        "date-parts": [
+          [
+            2019
+          ]
+        ]
+      },
+      "published-print": {
+        "date-parts": [
+          [
+            2019
+          ]
+        ]
+      },
+      "volume": "4",
+      "issue": "2",
+      "page": "55-70",
+      "publisher": "Example Press"
+    }
+  ]
+}

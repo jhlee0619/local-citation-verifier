@@ -5,8 +5,9 @@
  * server/proxy_core.py do: the same upstreams, allowed path prefixes,
  * User-Agent and Semantic Scholar API key header, arXiv BibTeX wrapped as
  * { id, bibtex }, and Crossref's rate-limit headers passed through so the
- * providers' pacers learn the live limits. PubMed (NCBI E-utilities) is asked
- * directly, as on every page origin. Any other host is refused.
+ * providers' pacers learn the live limits. PubMed (NCBI E-utilities) and
+ * DataCite (/dois/) are asked directly, as on every page origin. Any other
+ * host is refused.
  *
  * Successful GET answers (HTTP 200, no error body) are kept in a disk cache,
  * keyed by the canonical upstream URL; errors are never cached.
@@ -28,6 +29,8 @@ export const MAX_METADATA_RESPONSE_BYTES = 4 * 1024 * 1024;
 export const MAX_ARXIV_BIBTEX_BYTES = 1024 * 1024;
 export const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 export const PUBMED_ORIGIN = "https://eutils.ncbi.nlm.nih.gov";
+// DataCite's DOI records (DOI and arXiv ID existence), asked directly too.
+export const DATACITE_ORIGIN = "https://api.datacite.org";
 
 // server/vllm_proxy_server.py: route prefix, upstream base, allowed prefixes.
 export const PROXY_ROUTES = Object.freeze([
@@ -86,11 +89,12 @@ export function parseArxivId(value) {
 
 // What answers a request the providers make: { kind: "health" }, { kind:
 // "arxiv", id, url }, { kind: "proxy", url } (a metadata route) or { kind:
-// "direct", url } (PubMed). BadRequestError for a path the proxy refuses;
-// an Error for any other host.
+// "direct", url } (PubMed, DataCite /dois/). BadRequestError for a path the
+// proxy refuses; an Error for any other host.
 export function upstreamFor(requestUrl, origin = globalThis.window?.location?.origin || LCV_ORIGIN) {
   const url = new URL(String(requestUrl));
   if (url.origin === PUBMED_ORIGIN) return { kind: "direct", url: url.href };
+  if (url.origin === DATACITE_ORIGIN && url.pathname.startsWith("/dois/")) return { kind: "direct", url: url.href };
   if (url.origin !== origin) throw new Error(`lcv refuses a request to ${url.origin}`);
   if (url.pathname === HEALTH_ROUTE) return { kind: "health" };
   if (url.pathname.startsWith(ARXIV_ROUTE)) {
@@ -249,8 +253,8 @@ export function createCliFetch({ transport = globalThis.fetch, cache = null, env
     if (target.kind === "health") return jsonResponse(200, { ...APP_SIGNATURE });
 
     if (target.kind === "direct") {
-      // PubMed: the page asks NCBI itself, so a network error stays one.
-      const answer = await upstreamGet(target.url, { signal, limit: MAX_METADATA_RESPONSE_BYTES, label: "PubMed" });
+      // PubMed and DataCite: the page asks them itself, so a network error stays one.
+      const answer = await upstreamGet(target.url, { signal, limit: MAX_METADATA_RESPONSE_BYTES, label: new URL(target.url).host });
       return upstreamResponse(answer.status, answer.body,
         { "content-type": answer.headers.get("content-type") || "text/plain", ...pickHeaders(answer.headers, PUBMED_HEADERS) });
     }

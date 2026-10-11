@@ -47,7 +47,7 @@ After you touch a bibliography or citation commands, run both:
 
 ```bash
 lcv check --strict refs.bib            # every .bib/.ris/.nbib you changed
-lcv keys paper.tex refs.bib            # each manuscript you changed, against its bibliographies
+lcv keys paper.tex refs.bib --strict   # each manuscript you changed, against its bibliographies
 ```
 
 Clear every blocking line (`KEY — STATUS — action — record`):
@@ -56,12 +56,14 @@ Clear every blocking line (`KEY — STATUS — action — record`):
 | --- | --- |
 | `updated` (Auto-Updated) | `lcv fix refs.bib --in-place`, then check again. |
 | `needs_review` | If you are certain which work was intended, replace the **whole** entry with `lcv resolve … --bibtex --key KEY` (the action line names the command). Otherwise remove the citation, and either remove the claim that depends on it or leave a visible `TODO(citation)` marker; tell the user. |
+| `doi_unconfirmed`, `arxiv_unconfirmed`, `pmid_unconfirmed` | The work exists but the identifier in the entry does not. Replace the whole entry with `lcv resolve` output; never invent or guess an identifier. |
 | `not_found` | Treat it as possibly fabricated. Replace it with a resolved real work, or remove it. Books, reports, guidelines and other works outside database coverage need the **user** to approve them with `lcv allow` (you must not). |
 | `serious_notice` (retracted, withdrawn, removed, expression of concern) | Do not cite it unless the text discusses the retraction itself. Tell the user. |
 | `lookup_failed` / exit 3 | Rerun later. Never assume the entry is valid. |
 | `invalid` | Fix the BibTeX syntax at the reported line. |
 | `stale_approval` | The entry changed after a human approved it: restore it, or ask the user to approve again. |
 | `lcv keys`: missing key | Add the entry with `lcv resolve`, or correct the key in the citation. |
+| `lcv keys`: unparsable citation command | Write it as `\cite{key1,key2}` with existing keys. |
 
 ### 3. Never weaken or bypass the checks
 
@@ -71,7 +73,9 @@ Clear every blocking line (`KEY — STATUS — action — record`):
 
 ### 4. Definition of done
 
-You are done with references only when `lcv check --strict` exits 0 for every bibliography you changed and `lcv keys` reports no missing keys. In your final message, list anything left for the user: entries that need a human approval, removed citations, `TODO(citation)` markers, retracted works, failed lookups.
+You are done with references only when `lcv check --strict` exits 0 for every bibliography you changed and `lcv keys --strict` exits 0 for every manuscript you changed. In your final message, list anything left for the user: entries that need a human approval, removed citations, `TODO(citation)` markers, retracted works, failed lookups.
+
+The plugin's Stop hook blocks finishing while those checks fail, at most three consecutive times for the same unresolved set; then it lets you stop and shows the user a warning listing what is still unverified. Being let through is not a pass, and the hook does not guarantee that every fix is made: this definition of done does.
 
 ### 5. Existence is not support
 

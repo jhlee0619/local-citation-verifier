@@ -5,12 +5,12 @@
  * erratum notices. Asked directly from the browser on every origin (no
  * proxy route), without credentials, e-mail address or API key. DOM-free.
  */
-import * as Net from "./net.js?v=20261011-s14";
+import * as Net from "./net.js?v=20261012-s15";
 import {
   authorNames, entryDoi, entryPmcid, entryPmid, foldText, htmlToText, normalizeDoi, normalizePmcid,
   normalizePmid, parseYear,
-} from "./text.js?v=20261011-s14";
-import { createRecord, mergeNotices } from "./records.js?v=20261011-s14";
+} from "./text.js?v=20261012-s15";
+import { createRecord, mergeNotices } from "./records.js?v=20261012-s15";
 
   const EUTILS = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/";
   // E-utilities ask callers to name their tool; no e-mail address or API key
@@ -92,6 +92,10 @@ import { createRecord, mergeNotices } from "./records.js?v=20261011-s14";
     ].filter(Boolean).join(" OR ");
   }
 
+  // The ECitMatch key field: NCBI only echoes it back with the answer, so a
+  // neutral per-request token stands in for the user's citation key.
+  const CITMATCH_KEY = "q1";
+
   // ECitMatch fields, or null unless journal, volume and first page are
   // known. Every part has "|" and line breaks removed:
   //   journal      the journal field folded, non-[a-z0-9] runs → one space
@@ -99,7 +103,7 @@ import { createRecord, mergeNotices } from "./records.js?v=20261011-s14";
   //   volume       as written (trimmed)
   //   firstPage    pages up to the first dash
   //   firstAuthor  folded family name + " " + folded initials ("isensee f"), else ""
-  //   key          the citation key
+  //   key          CITMATCH_KEY (never the citation key)
   function citmatchParts(entry) {
     const clean = value => String(value ?? "").replace(/[|\r\n]+/g, " ").replace(/\s+/g, " ").trim();
     const journal = foldText(entry?.journal).replace(/[^a-z0-9]+/g, " ").trim();
@@ -117,7 +121,7 @@ import { createRecord, mergeNotices } from "./records.js?v=20261011-s14";
       volume,
       firstPage,
       firstAuthor: family ? clean(`${family} ${initials}`) : "",
-      key: clean(entry?.ID),
+      key: CITMATCH_KEY,
     };
   }
 
@@ -136,10 +140,13 @@ import { createRecord, mergeNotices } from "./records.js?v=20261011-s14";
     return Array.isArray(ids) ? ids.map(normalizePmid).filter(Boolean) : [];
   }
 
-  // ECitMatch text → PMIDs: each line is the bdata with the PMID (or
-  // NOT_FOUND / AMBIGUOUS …) appended.
-  function citmatchIds(text) {
-    return String(text ?? "").split(/\r?\n/).map(line => normalizePmid(line.split("|").at(-1))).filter(Boolean);
+  // ECitMatch text → PMIDs: each line is the bdata (NCBI may normalise the
+  // journal) with the PMID (or NOT_FOUND / AMBIGUOUS …) appended; only the
+  // lines that echo `key` (the request's token) answer the request.
+  function citmatchIds(text, key = CITMATCH_KEY) {
+    return String(text ?? "").split(/\r?\n/).map(line => line.split("|"))
+      .filter(parts => parts.length >= 7 && parts[5].trim() === key)
+      .map(parts => normalizePmid(parts.at(-1))).filter(Boolean);
   }
 
   // ESummary JSON → its document summaries, in uids order.
@@ -376,7 +383,17 @@ import { createRecord, mergeNotices } from "./records.js?v=20261011-s14";
       return pubmedRecords(await esummary(ids, run), retrieval);
     }
 
-    return { search, pacer };
+    // The PubMed records carrying one PMID or PMCID (an existence check):
+    // the PMID's ESummary, or ESearch PMCn[pmc] then ESummary. [] when PubMed
+    // has none; a failed request rejects.
+    async function identifierRecords(kind, id, run) {
+      const ids = kind === "pmcid" ? await esearch(`${id}[pmc]`, run) : [id];
+      if (!ids.length) return [];
+      return pubmedRecords(await esummary(ids.slice(0, SUMMARY_MAX_IDS), run), "pubmed_id")
+        .filter(record => (kind === "pmcid" ? record.pmcid : record.pmid) === id);
+    }
+
+    return { search, identifierRecords, pacer };
   }
 
 export {
@@ -384,6 +401,7 @@ export {
   TOOL,
   INITIAL_INTERVAL_MS,
   STOP_WORDS,
+  CITMATCH_KEY,
   significantTitleWords,
   pubmedTerm,
   pubmedTermRelaxed,

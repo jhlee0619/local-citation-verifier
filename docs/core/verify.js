@@ -8,13 +8,13 @@
  */
 import {
   entryDoi, entryPmcid, entryPmid, extractArxivId, present, stripLatex, TITLE_MATCH_THRESHOLD, titleSimilarity,
-} from "./text.js?v=20261011-s14";
-import { candidateFingerprint as recordFingerprint, CORE_FIELDS } from "./records.js?v=20261011-s14";
-import * as Rec from "./records.js?v=20261011-s14";
-import * as Ver from "./versions.js?v=20261011-s14";
-import * as Net from "./net.js?v=20261011-s14";
-import { runBoundedQueue } from "./net.js?v=20261011-s14";
-import * as Judge from "./judge.js?v=20261011-s14";
+} from "./text.js?v=20261012-s15";
+import { candidateFingerprint as recordFingerprint, CORE_FIELDS } from "./records.js?v=20261012-s15";
+import * as Rec from "./records.js?v=20261012-s15";
+import * as Ver from "./versions.js?v=20261012-s15";
+import * as Net from "./net.js?v=20261012-s15";
+import { runBoundedQueue } from "./net.js?v=20261012-s15";
+import * as Judge from "./judge.js?v=20261012-s15";
 
   // ─── Decisions ─────────────────────────────────────────────────────
   const ORIGINAL_DEFAULT_STATUSES = new Set([
@@ -539,7 +539,9 @@ import * as Judge from "./judge.js?v=20261011-s14";
   // ─── Status policy ─────────────────────────────────────────────────
   //   Verified      the entry's own DOI/arXiv ID links a record, or a record
   //                 strongly matches, and the core fields (title, author,
-  //                 year, venue, entry type) agree. Fields the entry lacks are
+  //                 year, venue, entry type) agree, and every identifier the
+  //                 entry carries (DOI, arXiv ID, PMID, PMCID) exists
+  //                 (Rec.identifierStates). Fields the entry lacks are
   //                 non-blocking suggestions.
   //   Auto-updated  (a) "identifier": the record the entry's DOI/arXiv ID
   //                 links (selectCanonical: complete, atomic, unique core,
@@ -550,7 +552,10 @@ import * as Judge from "./judge.js?v=20261011-s14";
   //                 round-trips through Crossref to a strong match.
   //   Needs Review  any other change to a same-work entry, integrity issues,
   //                 id_title_mismatch, id_conflict, core_conflict,
-  //                 doi_conflict, pmid_conflict, metadata_conflict, a failed DOI round trip,
+  //                 doi_unconfirmed, arxiv_unconfirmed, pmid_unconfirmed (an
+  //                 identifier of the entry definitively absent: never
+  //                 removed automatically), doi_conflict, pmid_conflict,
+  //                 metadata_conflict, a failed DOI round trip,
   //                 or a risk the judge reports; also, without a same-work
   //                 record, a record with the entry's exact title by other
   //                 authors (wrong_authors) or of another year (wrong_year),
@@ -558,6 +563,8 @@ import * as Judge from "./judge.js?v=20261011-s14";
   //                 candidate / original / exclude decision.
   //   Not Found     no same-work record (no_matching_record); plausible
   //                 records stay visible for an explicit choice only.
+  //   Lookup failed a same-work record exists but an identifier lookup
+  //                 failed (identifier_lookup_failed): retry.
   // Only authoritative records (Rec.isAuthoritative: not Semantic Scholar)
   // confirm, auto-update, round-trip or show a title-only mismatch. Same-work
   // records from Semantic Scholar alone make the entry Needs Review
@@ -574,10 +581,14 @@ import * as Judge from "./judge.js?v=20261011-s14";
     return pool.filter(record => Rec.directLinkKinds(entry, record).length);
   }
 
-  // The entry's DOI/arXiv ID resolves to a record with another title.
+  // The entry's DOI/arXiv ID resolves to a record with another title (a
+  // pooled record it links, or the record an identifier check found).
   function idTitleMismatch(entry, direct) {
     return direct.some(record => titleSimilarity(entry.title, record.title) < TITLE_MATCH_THRESHOLD);
   }
+
+  // The review reason for an identifier that does not exist.
+  const UNCONFIRMED_REASONS = Object.freeze({ doi: "doi_unconfirmed", arxiv: "arxiv_unconfirmed", pmid: "pmid_unconfirmed", pmcid: "pmid_unconfirmed" });
 
   // The entry's DOI and its arXiv ID resolve to different works.
   function idConflict(entry, direct) {
@@ -690,17 +701,29 @@ import * as Judge from "./judge.js?v=20261011-s14";
     // Only Semantic Scholar lists the work: nothing can confirm the entry.
     if (!sameWorkRecords.some(Rec.isAuthoritative)) reasons.push("unconfirmed_source");
     const direct = directRecords(entry, pool);
-    if (idTitleMismatch(entry, direct)) reasons.push("id_title_mismatch");
+    // Every identifier the entry carries must exist, independently of the
+    // work match (Rec.identifierStates): one that is definitively absent is
+    // a review reason, a failed lookup leaves the entry unconfirmed.
+    const identifiers = Rec.identifierStates(entry, pool, lookup?.identifiers);
+    const checked = identifiers.map(item => item.record).filter(record => record && !direct.includes(record));
+    if (idTitleMismatch(entry, [...direct, ...checked])) reasons.push("id_title_mismatch");
     if (idConflict(entry, direct)) reasons.push("id_conflict");
     if (coreConflict(direct)) reasons.push("core_conflict");
-    const confirming = reasons.length ? null : confirmingRecord(entry, lookup);
+    for (const { kind, state } of identifiers) {
+      if (state !== "absent") continue;
+      const reason = (kind === "pmid" || kind === "pmcid") && pubmedIdConflict(entry, pool, sameWorkRecords)
+        ? "pmid_conflict" : UNCONFIRMED_REASONS[kind];
+      if (!reasons.includes(reason)) reasons.push(reason);
+    }
+    const identifierFailed = identifiers.some(item => item.state === "failed");
+    const confirming = reasons.length || identifierFailed ? null : confirmingRecord(entry, lookup);
     if (confirming) {
       if (entryDoi(entry) && entryDoi(confirming) && entryDoi(entry) !== entryDoi(confirming)) reasons.push("doi_conflict");
       if (pubmedIdConflict(entry, pool, sameWorkRecords)) reasons.push("pmid_conflict");
       if (Rec.hasCriticalMetadataConflict(entry, confirming)) reasons.push("metadata_conflict");
     }
     const additive = confirming && !reasons.length ? additiveCandidate(entry, lookup) : null;
-    return { reasons, sameWorkRecords, direct, confirming, additive };
+    return { reasons, sameWorkRecords, direct, confirming, additive, identifierFailed };
   }
 
   function normalizedJudgeStatus(value) {
@@ -810,6 +833,17 @@ import * as Judge from "./judge.js?v=20261011-s14";
       return { ...base, status: "needs_review", reason: reasonList[0], reasons: reasonList, recommendedIndex: recommended, record: shown };
     };
     if (reasons.length) return review(reasons);
+    // An identifier lookup failed: nothing is confirmed until a retry.
+    if (assessment.identifierFailed) {
+      return {
+        ...base,
+        status: "lookup_failed",
+        reason: "identifier_lookup_failed",
+        reasons: ["identifier_lookup_failed"],
+        record: choices.find(choice => Rec.sameWork(entry, choice)) || null,
+        lookupError: "identifier lookup failed",
+      };
+    }
 
     if (assessment.confirming) {
       const additive = assessment.additive;
@@ -909,6 +943,7 @@ import * as Judge from "./judge.js?v=20261011-s14";
       sourceWarnings: options.sourceWarnings || [],
       doiRecords: options.doiRecords || new Map(),
       noticesByDoi: options.noticesByDoi || new Map(),
+      identifiers: options.identifiers || {},
       roundTrip: null,
       pendingJudge: null,
     };
@@ -930,6 +965,7 @@ import * as Judge from "./judge.js?v=20261011-s14";
       sourceWarnings: pool.sourceWarnings,
       doiRecords: pool.doiRecords,
       noticesByDoi: pool.noticesByDoi,
+      identifiers: pool.identifiers,
     });
     const { clustered, choices } = lookup;
     if (lookup.additive) {
@@ -1045,6 +1081,7 @@ import * as Judge from "./judge.js?v=20261011-s14";
       integrity_issues: Rec.entryIntegrityIssues(entry),
       notices: outcome.notices || [],
       run_snapshot: run.settings,
+      ...(outcome.lookupError ? { lookup_error: outcome.lookupError } : {}),
     }, status === "needs_review" || status === "lookup_failed");
   }
 

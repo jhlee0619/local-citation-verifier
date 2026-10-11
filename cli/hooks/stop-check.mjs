@@ -8,16 +8,18 @@
  *
  * Fast path (no network): only when the git working tree has changed or new
  * .bib/.ris/.nbib files, or changed .tex/.md files with \cite commands, does it
- * run `lcv check --strict` on those bibliographies and `lcv keys` for those
- * manuscripts (against their \bibliography{}/\addbibresource{} files, else
- * every .bib in the repository), in-process, within LCV_HOOK_TIMEOUT seconds
- * (default 180).
+ * run `lcv check --strict` on those bibliographies and `lcv keys --strict` for
+ * those manuscripts (against their \bibliography{}/\addbibresource{} files,
+ * else every .bib in the repository), in-process, within LCV_HOOK_TIMEOUT
+ * seconds (default 180). It blocks on everything those commands block on
+ * (missing keys and unparsable citation commands included), and on a citing
+ * manuscript with no bibliography file at all.
  *
- * Loop guard (state in <git dir>/lcv-hook-state.json): when the hook already
- * continued the turn (stop_hook_active) and the failing set is unchanged after
- * MAX_BLOCKS blocks, the stop is allowed with a systemMessage listing what is
- * still unverified. Failed lookups and timeouts block once, then warn.
- * LCV_HOOK=off disables the hook.
+ * Loop guard (state in <git dir>/lcv-hook-state.json): the hook blocks the
+ * stop at most MAX_BLOCKS consecutive times for the same unresolved set; then
+ * it allows the stop with a visible systemMessage listing what is still
+ * unverified. It does not guarantee that the agent fixes everything. Failed
+ * lookups and timeouts block once, then warn. LCV_HOOK=off disables the hook.
  */
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
@@ -76,7 +78,7 @@ function clip(lines) {
  *   allBibliographies(root) → [absolute path of every .bib in the repository]
  *   exists(file)          → boolean
  *   check(files, ms)      → lcv.check/1 report, or { timedOut: true } | { error }
- *   keys(manuscript, bibs) → lcv.keys/1 report, or { error }
+ *   keys(manuscript, bibs, { strict }) → lcv.keys/1 report, or { error }
  *   loadState(gitDir) / saveState(gitDir, state)
  * Returns the JSON object to print.
  */
@@ -117,7 +119,16 @@ export async function decideStop(input, deps) {
   for (const { file, text } of manuscripts) {
     const named = bibliographiesOf(text, file, repo.root).map(choices => choices.find(deps.exists)).filter(Boolean);
     const bibs = named.length ? [...new Set(named)] : deps.allBibliographies(repo.root);
-    const report = await deps.keys(file, bibs);
+    if (!bibs.length) {
+      findings.push({
+        id: `${rel(file)}|no_bibliography`,
+        line: `${rel(file)} — citations found but no bibliography file (none named by \\bibliography{} / \\addbibresource{}, no .bib in the repository) — add one with entries from lcv resolve … --bibtex`,
+        network: false,
+      });
+      continue;
+    }
+    // Everything lcv keys --strict blocks on: missing keys and unparsable commands.
+    const report = await deps.keys(file, bibs, { strict: true });
     if (report?.error || !report?.missing) {
       warnings.push(`lcv keys failed for ${rel(file)} (${report?.error || "no report"})`);
       continue;
@@ -125,7 +136,13 @@ export async function decideStop(input, deps) {
     for (const item of report.missing)
       findings.push({
         id: `${rel(file)}|${item.key}|missing_key`,
-        line: `${item.key} — cited in ${rel(file)} but missing from ${bibs.length ? bibs.map(rel).join(", ") : "every bibliography (none found)"}${item.case_mismatch ? ` (only "${item.case_mismatch}" exists)` : ""} — add the entry with lcv resolve … --bibtex, or correct the key`,
+        line: `${item.key} — cited in ${rel(file)} but missing from ${bibs.map(rel).join(", ")}${item.case_mismatch ? ` (only "${item.case_mismatch}" exists)` : ""} — add the entry with lcv resolve … --bibtex, or correct the key`,
+        network: false,
+      });
+    for (const item of report.unparsable || [])
+      findings.push({
+        id: `${rel(file)}|${item.citation}|unparsable`,
+        line: `${item.citation} — unparsable citation command in ${rel(file)} — write it as \\cite{key1,key2} with existing keys`,
         network: false,
       });
   }
@@ -240,7 +257,7 @@ export function realDeps(env = process.env) {
       const timeout = new Promise(resolve => { timer = setTimeout(() => resolve({ timedOut: true }), ms); });
       return Promise.race([runLcv(["check", ...files, "--strict"]), timeout]).finally(() => clearTimeout(timer));
     },
-    keys: (manuscript, bibs) => runLcv(["keys", manuscript, ...bibs]),
+    keys: (manuscript, bibs, options = {}) => runLcv(["keys", manuscript, ...bibs, ...(options.strict ? ["--strict"] : [])]),
     loadState: gitDir => { try { return JSON.parse(fs.readFileSync(path.join(gitDir, STATE_FILE), "utf8")); } catch { return null; } },
     saveState: (gitDir, state) => {
       const file = path.join(gitDir, STATE_FILE);

@@ -3,11 +3,11 @@
  * detected on paste or upload and converted to BibTeX entries, which the
  * normal pipeline then verifies and exports as BibTeX. DOM-free.
  */
-import { entriesToBib } from "./bibtex.js?v=20261011-s14";
-import { pubmedAuthorName, pubmedPages, pubmedTitle, significantTitleWords } from "./pubmed.js?v=20261011-s14";
+import { entriesToBib } from "./bibtex.js?v=20261012-s15";
+import { pubmedAuthorName, pubmedPages, pubmedTitle, significantTitleWords } from "./pubmed.js?v=20261012-s15";
 import {
   authorNames, foldText, normalizeDoi, normalizePmcid, normalizePmid, parseYear, pmcidInText, pmidInText,
-} from "./text.js?v=20261011-s14";
+} from "./text.js?v=20261012-s15";
 
   // ─── Detection ─────────────────────────────────────────────────────
   // RIS: a "TY  - " line; MEDLINE: a "PMID- " line. Text with a BibTeX entry

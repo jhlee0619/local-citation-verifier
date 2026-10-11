@@ -1,0 +1,85 @@
+{
+  "arxiv": {
+    "2203.01234": "@misc{varga2022selfcorrecting,\n  title={Self-Correcting Reference Lists with Retrieval Feedback},\n  author={Varga, Ilona and Mendes, Rui and Holt, Agnes},\n  year={2022},\n  eprint={2203.01234},\n  archivePrefix={arXiv}\n}"
+  },
+  "crossref": [
+    {
+      "DOI": "10.5555/ecl.2023.0017",
+      "URL": "https://doi.org/10.5555/ecl.2023.0017",
+      "type": "proceedings-article",
+      "title": [
+        "Self-Correcting Reference Lists with Retrieval Feedback"
+      ],
+      "author": [
+        {
+          "given": "Ilona",
+          "family": "Varga"
+        },
+        {
+          "given": "Rui",
+          "family": "Mendes"
+        },
+        {
+          "given": "Agnes",
+          "family": "Holt"
+        }
+      ],
+      "container-title": [
+        "Proceedings of the Example Conference on Learning"
+      ],
+      "issued": {
+        "date-parts": [
+          [
+            2023
+          ]
+        ]
+      },
+      "published-print": {
+        "date-parts": [
+          [
+            2023
+          ]
+        ]
+      },
+      "page": "210-221",
+      "publisher": "Example Press"
+    }
+  ],
+  "datacite": [
+    {
+      "doi": "10.48550/arxiv.2203.01234",
+      "titles": [
+        {
+          "title": "Self-Correcting Reference Lists with Retrieval Feedback"
+        }
+      ],
+      "publicationYear": 2022,
+      "publisher": "arXiv",
+      "url": "https://arxiv.org/abs/2203.01234",
+      "types": {
+        "resourceTypeGeneral": "Preprint",
+        "bibtex": "misc"
+      },
+      "creators": [
+        {
+          "name": "Varga, Ilona",
+          "nameType": "Personal",
+          "familyName": "Varga",
+          "givenName": "Ilona"
+        },
+        {
+          "name": "Mendes, Rui",
+          "nameType": "Personal",
+          "familyName": "Mendes",
+          "givenName": "Rui"
+        },
+        {
+          "name": "Holt, Agnes",
+          "nameType": "Personal",
+          "familyName": "Holt",
+          "givenName": "Agnes"
+        }
+      ]
+    }
+  ]
+}

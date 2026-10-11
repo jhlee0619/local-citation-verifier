@@ -17,5 +17,6 @@ test-results/
 .omo/
 !tests/fixtures/**/*.bib
 !eval/fabrication/*.bib
+!regression/fixtures/*.bib
 local/
 

@@ -3,7 +3,7 @@
  * built with the html`` tag, which escapes every interpolated value unless it
  * is markup html`` built itself or raw() marks as trusted.
  */
-import { safeExternalUrl } from "../core/text.js?v=20261011-s14";
+import { safeExternalUrl } from "../core/text.js?v=20261012-s15";
 
 class Markup {
   constructor(text) { this.text = text; }

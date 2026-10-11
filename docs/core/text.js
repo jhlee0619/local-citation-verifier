@@ -1,13 +1,14 @@
 /*
- * Text normalisation shared by every core module: LaTeX/Unicode tables,
- * one folded text form (foldText) and the keys built on it (title, surname,
- * venue), the one DOI normaliser, the one anchored arXiv extractor, the one
- * year parser, the one core signature, and fuzzy similarity. DOM-free.
+ * Text normalisation shared by every core module: LaTeX/Unicode tables, the
+ * ASCII-folded query form (foldText) and the Unicode comparison form
+ * (matchFold) with the keys built on it (title, surname, venue), the one DOI
+ * normaliser, the one anchored arXiv extractor, the one year parser, the one
+ * core signature, and fuzzy similarity. DOM-free.
  *
  * The side-effect import installs the vendored fuzzball bundle as
  * globalThis.fuzzball, which tokenSortRatio reads.
  */
-import "../vendor/fuzzball-2.2.3.umd.min.js?v=20261011-s14";
+import "../vendor/fuzzball-2.2.3.umd.min.js?v=20261012-s15";
 
   // ─── Matching thresholds ───────────────────────────────────────────
   const TITLE_MATCH_THRESHOLD = 85;
@@ -287,15 +288,38 @@ import "../vendor/fuzzball-2.2.3.umd.min.js?v=20261011-s14";
   // Letters that NFD does not decompose into a base letter plus a mark.
   const FOLDED_LETTERS = { "ø": "o", "ß": "ss", "æ": "ae", "œ": "oe", "ł": "l", "đ": "d", "ð": "d", "þ": "th", "ı": "i", "ȷ": "j", "ŋ": "ng" };
 
-  // The one folded comparison form: LaTeX → Unicode (stripLatex), diacritics
-  // and special letters folded to ASCII, lower-case, whitespace collapsed.
-  // Punctuation is kept; the keys below drop it.
+  // The folded query form (the provider query builders and other ASCII
+  // keys): LaTeX → Unicode (stripLatex), diacritics and special letters
+  // folded to ASCII, lower-case, whitespace collapsed. Punctuation is kept.
+  // Frozen: external tools reproduce the queries built on it. Comparisons use
+  // matchFold.
   function foldText(value) {
     if (value === null || value === undefined) return "";
     return stripLatex(String(value)).normalize("NFD").replace(/[̀-ͯ]/g, "")
       .toLowerCase().replace(/[øßæœłđðþıȷŋ]/g, ch => FOLDED_LETTERS[ch])
       .replace(/\s+/g, " ").trim();
   }
+
+  // Combining marks of the diacritic blocks (Latin, Greek, Cyrillic
+  // accents). Other scripts' marks (Devanagari vowel signs, Hebrew points,
+  // kana voicing marks) are part of their letters and stay.
+  const DIACRITIC_MARKS = /[\u0300-\u036f\u1ab0-\u1aff\u1dc0-\u1dff\u20d0-\u20ff\ufe20-\ufe2f]/g;
+
+  // The one comparison form: LaTeX → Unicode (stripLatex), compatibility
+  // forms decomposed (NFKD: ligatures, full-width and superscript forms),
+  // diacritics removed and special letters folded as in foldText,
+  // lower-case, recomposed (NFC: Hangul syllables, kana), whitespace
+  // collapsed. Letters of every script are kept, so Latin text folds as
+  // before while Korean, Chinese, Cyrillic or Greek text keeps its words.
+  function matchFold(value) {
+    if (value === null || value === undefined) return "";
+    return stripLatex(String(value)).normalize("NFKD").replace(DIACRITIC_MARKS, "")
+      .toLowerCase().replace(/[øßæœłđðþıȷŋ]/g, ch => FOLDED_LETTERS[ch])
+      .normalize("NFC").replace(/\s+/g, " ").trim();
+  }
+
+  // Runs of characters other than letters, digits and their marks.
+  const NON_WORD = /[^\p{L}\p{N}\p{M}]+/gu;
 
   function normalizeEvidenceLanguage(value) {
     const lang = String(value || "").toLowerCase();
@@ -323,19 +347,42 @@ import "../vendor/fuzzball-2.2.3.umd.min.js?v=20261011-s14";
       GREEK_NAMES.set(lower, ` ${name.toLowerCase().replace(/^var/, "")} `);
   }
 
-  // The one title key (titles, duplicate keys, core signatures, record
-  // fingerprints): foldText, Greek letters named, every run of characters
-  // other than [a-z0-9] collapsed to one space.
+  // A Greek letter standing alone or in a pair (β-VAE, Aβ, γδ T cells) is a
+  // symbol and is named; longer Greek runs are words and stay words.
+  const GREEK_SYMBOL = /(?<!\p{Script=Greek})\p{Script=Greek}{1,2}(?!\p{Script=Greek})/gu;
+
+  // The one title key (title comparison, duplicate keys, core signatures,
+  // record fingerprints, cache keys): matchFold, Greek symbols named, every
+  // run of characters other than letters, digits and marks collapsed to one
+  // space. "β-VAE", "$\beta$-VAE" and "beta-VAE" share a key; a Korean or
+  // Chinese title keeps its words.
   function titleKey(value) {
+    return matchFold(value).replace(GREEK_SYMBOL, run => [...run].map(ch => GREEK_NAMES.get(ch) || " ").join(""))
+      .replace(NON_WORD, " ").trim();
+  }
+
+  // The search-query title key (DBLP and OpenReview queries): foldText,
+  // Greek letters named, every run of characters other than [a-z0-9]
+  // collapsed to one space. Kept with the queries; comparisons use titleKey.
+  function queryTitleKey(value) {
     return foldText(value).replace(/\p{Script=Greek}/gu, ch => GREEK_NAMES.get(ch) || " ")
       .replace(/[^a-z0-9]+/g, " ").trim();
+  }
+
+  // A title that may be evidence on its own (same work, strong match,
+  // duplicate): its key has a letter and at least two words. "2024",
+  // "Introduction" or one unbroken run of Chinese characters needs an
+  // identifier.
+  function titleIsSpecific(title) {
+    const key = titleKey(title);
+    return /\p{L}/u.test(key) && key.split(" ").length >= 2;
   }
 
   function searchTitleTokens(title, options = {}) {
     const minLength = Number.isInteger(options.minLength) ? options.minLength : 3;
     const maxTokens = Number.isInteger(options.maxTokens) ? options.maxTokens : 8;
     const hyphenated = String(title || "").match(/[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+/g) || [];
-    const loose = titleKey(title).split(/\s+/).filter(Boolean);
+    const loose = queryTitleKey(title).split(/\s+/).filter(Boolean);
     const seen = new Set();
     const tokens = [];
     for (const token of [...hyphenated, ...loose]) {
@@ -367,9 +414,15 @@ import "../vendor/fuzzball-2.2.3.umd.min.js?v=20261011-s14";
     return globalThis.fuzzball.token_sort_ratio(a, b);
   }
 
+  // Token-sort similarity of two keys that are already processed (titleKey):
+  // fuzzball's own processing is skipped, so every script compares as it is.
+  function keySimilarity(a, b) {
+    return globalThis.fuzzball.token_sort_ratio(a, b, { full_process: false });
+  }
+
   // Token-sort similarity of the two title keys (0–100).
   function titleSimilarity(a, b) {
-    return tokenSortRatio(titleKey(a), titleKey(b));
+    return keySimilarity(titleKey(a), titleKey(b));
   }
 
   // ─── Years and pages ───────────────────────────────────────────────
@@ -421,10 +474,10 @@ import "../vendor/fuzzball-2.2.3.umd.min.js?v=20261011-s14";
     return parts.map(part => part.trim()).filter(Boolean);
   }
 
-  // Comparison key of a family name: folded, apostrophes and hyphens joined,
-  // leading particles dropped (the last token always stays).
+  // Comparison key of a family name: matchFold, apostrophes and hyphens
+  // joined, leading particles dropped (the last token always stays).
   function surnameKey(family) {
-    const tokens = foldText(family).replace(/['’`-]/g, "").split(/[^a-z0-9]+/).filter(Boolean);
+    const tokens = matchFold(family).replace(/['’`-]/g, "").split(NON_WORD).filter(Boolean);
     let start = 0;
     while (start < tokens.length - 1 && NAME_PARTICLES.has(tokens[start])) start++;
     return tokens.slice(start).join(" ");
@@ -494,23 +547,63 @@ import "../vendor/fuzzball-2.2.3.umd.min.js?v=20261011-s14";
     return first && !first.others ? first.family.replace(/\s+/g, " ").trim() : "";
   }
 
-  function initials(given) {
-    return foldText(given).split(/[\s.-]+/).filter(Boolean).map(part => part[0]).join("");
+  // Scripts whose single letter is a whole given name, never an initial.
+  const WHOLE_SYLLABLE = /[\p{Script=Han}\p{Script=Hangul}\p{Script=Hiragana}\p{Script=Katakana}]/u;
+
+  // Given-name tokens, folded (matchFold): { text, initial }. Hyphens split
+  // like spaces ("Jean-Pierre" = "Jean Pierre"); a single letter or a word
+  // followed by "." is an initial or abbreviation ("J.", "Chr."); an
+  // upper-case run of two or three letters is initials ("JA" = "J. A.").
+  function givenTokens(given) {
+    const tokens = [];
+    for (const [, word, dot] of stripLatex(given).normalize("NFC").matchAll(/([\p{L}\p{M}\p{N}'’]+)(\.)?/gu)) {
+      if (/^\p{Lu}{2,3}$/u.test(word)) {
+        for (const letter of word) tokens.push({ text: matchFold(letter), initial: true });
+        continue;
+      }
+      const text = matchFold(word).replace(/['’]/g, "");
+      if (text) tokens.push({ text, initial: !!dot || ([...text].length === 1 && !WHOLE_SYLLABLE.test(text)) });
+    }
+    return tokens;
   }
 
-  function isInitialOnly(given) {
-    const compact = foldText(given).replace(/[.\s-]/g, "");
-    return !!compact && compact.length <= 3;
+  // An initial or abbreviation matches a word it begins; two full words
+  // must be equal.
+  function givenTokenMatch(a, b) {
+    if (a.initial || b.initial) return a.text.startsWith(b.text) || b.text.startsWith(a.text);
+    return a.text === b.text;
   }
 
-  // Given names agree when either is missing, one set of initials extends
-  // the other, or an initials-only form shares the first initial.
+  // Given names agree when either is missing, when they spell one name
+  // ("Xiaoming" = "Xiao-Ming"), or when the first tokens match and the
+  // other tokens of the shorter form match, in order, tokens of the longer
+  // one (extra middle names or initials are allowed): "J." = "John" =
+  // "John A.", but "John" ≠ "James" and "John A." ≠ "John B.".
   function givensCompatible(a, b) {
-    const left = initials(a);
-    const right = initials(b);
-    if (!left || !right || left === right) return true;
-    if (left.startsWith(right) || right.startsWith(left)) return true;
-    return (isInitialOnly(a) || isInitialOnly(b)) && left[0] === right[0];
+    const left = givenTokens(a);
+    const right = givenTokens(b);
+    if (!left.length || !right.length) return true;
+    const spelled = list => (list.some(token => token.initial) ? null : list.map(token => token.text).join(""));
+    if (spelled(left) !== null && spelled(left) === spelled(right)) return true;
+    if (!givenTokenMatch(left[0], right[0])) return false;
+    const [shorter, longer] = left.length <= right.length ? [left, right] : [right, left];
+    let next = 1;
+    for (const token of shorter.slice(1)) {
+      while (next < longer.length && !givenTokenMatch(token, longer[next])) next++;
+      if (next >= longer.length) return false;
+      next++;
+    }
+    return true;
+  }
+
+  // One person: the same surname key and compatible given names.
+  function samePerson(a, b) {
+    return !!a && !!b && !a.others && !b.others && !!a.key && a.key === b.key && givensCompatible(a.given, b.given);
+  }
+
+  // The first authors of two lists are the same person.
+  function firstAuthorsCompatible(a, b) {
+    return samePerson(authorNames(a)[0], authorNames(b)[0]);
   }
 
   function hasTruncatedAuthorMarker(authorStr) {
@@ -529,7 +622,7 @@ import "../vendor/fuzzball-2.2.3.umd.min.js?v=20261011-s14";
     if (!leftNamed.length || !rightNamed.length) return false;
     const truncated = list => list.some(name => name.others) || false;
     const prefixOf = (shorter, longer) => shorter.length <= longer.length &&
-      shorter.every((name, index) => name.key === longer[index].key && givensCompatible(name.given, longer[index].given));
+      shorter.every((name, index) => samePerson(name, longer[index]));
     if (leftNamed.length === rightNamed.length && prefixOf(leftNamed, rightNamed)) return true;
     if (truncated(left) && prefixOf(leftNamed, rightNamed)) return true;
     if (truncated(right) && prefixOf(rightNamed, leftNamed)) return true;
@@ -537,18 +630,18 @@ import "../vendor/fuzzball-2.2.3.umd.min.js?v=20261011-s14";
   }
 
   // Strong-match author count: equal counts, or the shorter list is a prefix
-  // of the longer one or ends with "others".
+  // of the longer one (the same people: samePerson) or ends with "others".
   function authorCountsCompatible(a, b) {
     const left = authorNames(a);
     const right = authorNames(b);
-    const leftKeys = left.filter(name => !name.others).map(name => name.key);
-    const rightKeys = right.filter(name => !name.others).map(name => name.key);
-    if (!leftKeys.length || !rightKeys.length) return false;
-    if (leftKeys.length === rightKeys.length) return true;
-    const [shorter, longer, shorterList] = leftKeys.length < rightKeys.length
-      ? [leftKeys, rightKeys, left] : [rightKeys, leftKeys, right];
+    const leftNamed = left.filter(name => !name.others);
+    const rightNamed = right.filter(name => !name.others);
+    if (!leftNamed.length || !rightNamed.length) return false;
+    if (leftNamed.length === rightNamed.length) return true;
+    const [shorter, longer, shorterList] = leftNamed.length < rightNamed.length
+      ? [leftNamed, rightNamed, left] : [rightNamed, leftNamed, right];
     if (shorterList.some(name => name.others)) return true;
-    return shorter.every((key, index) => key === longer[index]);
+    return shorter.every((name, index) => samePerson(name, longer[index]));
   }
 
   function authorIntegrityIssues(authorStr) {
@@ -582,15 +675,20 @@ import "../vendor/fuzzball-2.2.3.umd.min.js?v=20261011-s14";
     return found.length >= 30 && original.length <= 6;
   }
 
-  // Surname-key overlap of two author lists, 0–100.
+  // Overlap of two author lists, 0–100: the share of people (samePerson:
+  // surname key and compatible given names) both lists name.
   function compareAuthors(a, b) {
-    const left = new Set(authorKeys(a));
-    const right = new Set(authorKeys(b));
-    if (!left.size && !right.size) return 100;
-    if (!left.size || !right.size) return 0;
+    const left = authorNames(a).filter(name => !name.others && name.key);
+    const right = authorNames(b).filter(name => !name.others && name.key);
+    if (!left.length && !right.length) return 100;
+    if (!left.length || !right.length) return 0;
+    const unused = right.slice();
     let shared = 0;
-    for (const key of left) if (right.has(key)) shared++;
-    return (shared / Math.max(left.size, right.size)) * 100;
+    for (const name of left) {
+      const index = unused.findIndex(other => samePerson(name, other));
+      if (index >= 0) { unused.splice(index, 1); shared++; }
+    }
+    return (shared / Math.max(left.length, right.length)) * 100;
   }
 
   // ─── Venues ────────────────────────────────────────────────────────
@@ -604,7 +702,7 @@ import "../vendor/fuzzball-2.2.3.umd.min.js?v=20261011-s14";
   }
 
   function venueText(text) {
-    return foldText(text).replace(/&/g, " and ").replace(/^the\s+/, "").replace(/\s+/g, " ").trim();
+    return matchFold(text).replace(/&/g, " and ").replace(/^the\s+/, "").replace(/\s+/g, " ").trim();
   }
 
   // Venue lookup key: venueText without parentheticals, years, ordinals, a
@@ -615,7 +713,7 @@ import "../vendor/fuzzball-2.2.3.umd.min.js?v=20261011-s14";
       .replace(/\b(?:1[5-9]|20)\d{2}\b|\b\d+(?:st|nd|rd|th)\b/g, " ")
       .replace(/^(?:proceedings|proc\.?)(?:\s+of)?(?:\s+the)?\s+/, "")
       .replace(/^the\s+/, "")
-      .replace(/[^a-z0-9]+/g, " ")
+      .replace(NON_WORD, " ")
       .trim();
   }
 
@@ -917,13 +1015,17 @@ export {
   htmlToText,
   present,
   foldText,
+  matchFold,
   normalizeEvidenceLanguage,
   safeExternalUrl,
   titleKey,
+  queryTitleKey,
+  titleIsSpecific,
   searchTitleTokens,
   noticeClass,
   isCorrectionTitle,
   tokenSortRatio,
+  keySimilarity,
   titleSimilarity,
   parseYear,
   normalizePages,
@@ -933,6 +1035,8 @@ export {
   authorKeys,
   firstAuthorSurname,
   firstAuthorSearchToken,
+  givensCompatible,
+  firstAuthorsCompatible,
   authorListsEquivalent,
   authorCountsCompatible,
   authorIntegrityIssues,

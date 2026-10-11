@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'none'; object-src 'none'; form-action 'self'; script-src 'self'; connect-src 'self' https://api.crossref.org https://api.semanticscholar.org https://dblp.org https://eutils.ncbi.nlm.nih.gov; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'none'; object-src 'none'; form-action 'self'; script-src 'self'; connect-src 'self' https://api.crossref.org https://api.semanticscholar.org https://dblp.org https://eutils.ncbi.nlm.nih.gov https://api.datacite.org; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:" />
   <title>Local Citation Verifier — Local bibliography and citation support QA</title>
   <meta name="description" content="A browser-based citation quality desk for checking BibTeX metadata and judging whether cited manuscript sentences are supported by their referenced papers." />
   <meta name="keywords" content="BibTeX, bibliography checker, verify references, hallucinated citations, LaTeX, CrossRef, Semantic Scholar, DOI, citation checker, academic references, .bib file, Overleaf, BibLaTeX, reference manager, paper verification" />
@@ -38,7 +38,7 @@
   }
   </script>
 
-  <link rel="stylesheet" href="app.css?v=20261011-s14" />
+  <link rel="stylesheet" href="app.css?v=20261012-s15" />
 </head>
 <body data-hallmark-layout="narrative-workflow">
   <div class="page-wrap">
@@ -150,7 +150,7 @@
           <option value="off" selected>Off · evidence lookup only</option>
           <option value="vllm">vLLM server (local proxy)</option>
         </select>
-        <span class="citation-engine-status" id="citation-ai-status">Off · evidence lookup only. Nothing is sent to a server until you choose an engine.</span>
+        <span class="citation-engine-status" id="citation-ai-status">AI off: manuscript sentences are not sent to any model. Reference metadata (titles, authors, identifiers) is still sent to public databases to fetch abstracts.</span>
       </div>
 
       <div class="citation-action-row">
@@ -392,7 +392,7 @@
     </div>
   </dialog>
 
-  <script src="boot.js?v=20261011-s14"></script>
-  <script type="module" src="main.js?v=20261011-s14"></script>
+  <script src="boot.js?v=20261012-s15"></script>
+  <script type="module" src="main.js?v=20261012-s15"></script>
 </body>
 </html>

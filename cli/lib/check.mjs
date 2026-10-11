@@ -82,6 +82,7 @@ function decidedRecord(entry, result, pool) {
     sourceWarnings: pool.sourceWarnings,
     doiRecords: pool.doiRecords,
     noticesByDoi: pool.noticesByDoi,
+    identifiers: pool.identifiers,
   });
   if (lookup.additive) lookup.roundTrip = { ok: result.auto_select_source === "additive" };
   const outcome = D.decide(entry, lookup);
@@ -179,6 +180,9 @@ const REVIEW_ADVICE = {
   wrong_year: "a record with this title and first author has another year: replace the entry with that record",
   id_title_mismatch: "the entry's DOI or arXiv ID belongs to another title: correct the identifier, or replace the entry with the record it names",
   id_conflict: "the DOI and the arXiv ID identify different works: keep only the right one",
+  doi_unconfirmed: "the work matches the listed record, but the entry's DOI could not be found (Crossref, DataCite): fix or remove the DOI",
+  arxiv_unconfirmed: "the work matches the listed record, but the entry's arXiv ID could not be found (arXiv, DataCite): fix or remove it",
+  pmid_unconfirmed: "the work matches the listed record, but the entry's PMID or PMCID could not be found in PubMed: fix or remove it",
 };
 
 const clip = value => (String(value).length > 60 ? `${String(value).slice(0, 57)}…` : String(value));

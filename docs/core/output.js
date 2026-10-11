@@ -3,10 +3,10 @@
  * status badges and counts, and export readiness with its confirmation
  * token. DOM-free and markup-free; it never changes the results it reads.
  */
-import { present, titleKey } from "./text.js?v=20261011-s14";
-import { writeBib } from "./bibtex.js?v=20261011-s14";
-import { applyCandidateToEntry, CORE_FIELDS, entryIntegrityIssues, isAuthoritative, isSeriousNotice } from "./records.js?v=20261011-s14";
-import { applyDecision, originalDecision, resolveCandidate, reviewIssueCode } from "./verify.js?v=20261011-s14";
+import { present, titleIsSpecific, titleKey } from "./text.js?v=20261012-s15";
+import { writeBib } from "./bibtex.js?v=20261012-s15";
+import { applyCandidateToEntry, CORE_FIELDS, entryIntegrityIssues, isAuthoritative, isSeriousNotice } from "./records.js?v=20261012-s15";
+import { applyDecision, originalDecision, resolveCandidate, reviewIssueCode } from "./verify.js?v=20261012-s15";
 
   // ─── Preview state ─────────────────────────────────────────────────
   function isBlockingIssue(issue) {
@@ -98,7 +98,8 @@ import { applyDecision, originalDecision, resolveCandidate, reviewIssueCode } fr
         let key;
         if (s.dedupBy === "doi") key = (entry.doi || "").toLowerCase().trim();
         else if (s.dedupBy === "id") key = (entry.ID || "").toLowerCase().trim();
-        else key = titleKey(entry.title);
+        // A title that is not specific ("Introduction", "2024") never removes an entry.
+        else key = titleIsSpecific(entry.title) ? titleKey(entry.title) : "";
         if (!key) return true;
         if (seen.has(key)) return false;
         seen.add(key);

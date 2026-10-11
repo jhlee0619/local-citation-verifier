@@ -17,12 +17,14 @@ const REQUIRED_CSP = Object.freeze({
 });
 
 // The providers the GitHub Pages build asks directly from the browser:
-// connect-src must allow each of them (S11 added PubMed, NCBI E-utilities).
+// connect-src must allow each of them (S11 added PubMed, NCBI E-utilities;
+// S15 DataCite, which confirms DOIs and arXiv IDs).
 const REQUIRED_CONNECT_SOURCES = Object.freeze([
   "'self'",
   "https://api.crossref.org",
   "https://api.semanticscholar.org",
   "https://eutils.ncbi.nlm.nih.gov",
+  "https://api.datacite.org",
 ]);
 
 function fail(message) {

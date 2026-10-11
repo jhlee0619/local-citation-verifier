@@ -67,9 +67,27 @@ jobs:
           echo "source_sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
           echo "docs_tree_id=$docs_tree_id" >> "$GITHUB_OUTPUT"
 
+  regression:
+    needs: [preflight]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out exact source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ needs.preflight.outputs.source_sha }}
+          persist-credentials: false
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+
+      - name: Verdict regression suite (no network, no npm install)
+        run: node --test "regression/*.test.mjs"
+
   package_pages:
     if: inputs.produce_pages_artifact
-    needs: [preflight]
+    needs: [preflight, regression]
     runs-on: ubuntu-latest
     outputs:
       manifest_digest: ${{ steps.release.outputs.manifest_digest }}

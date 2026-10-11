@@ -7,27 +7,28 @@
  * classification. DOM-free (reads window.location only to pick endpoints and
  * request origins).
  */
-import * as Net from "./net.js?v=20261011-s14";
-import { parseBib } from "./bibtex.js?v=20261011-s14";
-import * as PubMed from "./pubmed.js?v=20261011-s14";
+import * as Net from "./net.js?v=20261012-s15";
+import { parseBib } from "./bibtex.js?v=20261012-s15";
+import * as PubMed from "./pubmed.js?v=20261012-s15";
 import {
-  arxivYearFromId, authorNames, entryDoi, entryPmid, entryVenue, expandVenue, extractArxivId,
+  arxivIdInText, arxivYearFromId, authorNames, entryDoi, entryPmid, entryVenue, expandVenue, extractArxivId,
   extractOpenReviewForumId, firstAuthorSearchToken, foldText, htmlToText, isPreprintVenue, MIN_TITLE_SIM,
-  normalizeArxivId, normalizeDoi, parseYear, safeExternalUrl, searchTitleTokens, stripLatex, titleKey,
-  titleSimilarity,
-} from "./text.js?v=20261011-s14";
+  normalizeArxivId, normalizeDoi, parseYear, queryTitleKey, safeExternalUrl, searchTitleTokens, stripLatex,
+  titleKey, titleSimilarity,
+} from "./text.js?v=20261012-s15";
 import {
-  createRecord, dedupeRecords, directLinkKinds, INFO_NOTICE_TYPES,
+  createRecord, dedupeRecords, directLinkKinds, identifierStates, INFO_NOTICE_TYPES,
   isCleanPublishedManifestation, mergeNotices, noticeType, recordNoticeClass, sameWork, SERIOUS_NOTICE_TYPES,
-} from "./records.js?v=20261011-s14";
+} from "./records.js?v=20261012-s15";
 
   // ─── Endpoints ─────────────────────────────────────────────────────
   // Every origin except GitHub Pages and file:// expects the local metadata
   // proxy at /api/*. Without the proxy no /api/* path is ever requested:
   // the providers are asked directly, and DBLP on GitHub Pages (blocked by
   // CORS), OpenReview, the arXiv BibTeX enrichment and the health probe are
-  // skipped (""). PubMed (NCBI E-utilities, CORS "*") is asked directly from
-  // every origin.
+  // skipped (""). PubMed (NCBI E-utilities, CORS "*") and DataCite (CORS for
+  // any origin; DOI and arXiv ID existence) are asked directly from every
+  // origin.
   const currentLocation = () => (typeof window === "undefined" ? null : window.location || null);
 
   function isGithubPages(location = currentLocation()) {
@@ -40,6 +41,9 @@ import {
   }
 
   const SS_FIELDS = "title,authors,year,venue,publicationVenue,externalIds";
+  // DataCite's REST API, one DOI per request (GET /dois/{doi}; 404 when the
+  // DOI is not registered there).
+  const DATACITE_API = "https://api.datacite.org/dois/";
 
   // The provider endpoints for a page location (window.location).
   function endpointsFor(location) {
@@ -65,6 +69,7 @@ import {
       LOCAL_ARXIV_BIBTEX: proxy ? "/api/arxiv/bibtex" : "",
       HEALTH: proxy ? "/api/health" : "",
       PUBMED_API: PubMed.EUTILS,
+      DATACITE_API,
     });
   }
 
@@ -321,6 +326,33 @@ import {
     };
   }
 
+  // A DataCite DOI record (JSON:API { data: { attributes } }) → a record
+  // body, or null without attributes. It confirms that the DOI (an arXiv DOI
+  // also its arXiv ID) exists and names its title; it is never a candidate.
+  function dataciteToStandard(data) {
+    const attributes = data?.data?.attributes;
+    if (!attributes || typeof attributes !== "object") return null;
+    const creators = (Array.isArray(attributes.creators) ? attributes.creators : []).map(creator => {
+      const family = htmlToText(creator?.familyName);
+      const given = htmlToText(creator?.givenName);
+      if (family) return given ? `${family}, ${given}` : family;
+      const name = htmlToText(creator?.name);
+      return name && creator?.nameType === "Organizational" ? `{${name}}` : name;
+    }).filter(Boolean);
+    const titles = Array.isArray(attributes.titles) ? attributes.titles : [];
+    const publisher = attributes.publisher && typeof attributes.publisher === "object" ? attributes.publisher.name : attributes.publisher;
+    return {
+      ENTRYTYPE: "misc",
+      title: htmlToText((titles.find(title => !title?.titleType) || titles[0])?.title),
+      author: creators.join(" and "),
+      year: Number.isInteger(Number(attributes.publicationYear)) && Number(attributes.publicationYear) > 0 ? String(attributes.publicationYear) : "",
+      publisher: htmlToText(publisher),
+      doi: normalizeDoi(attributes.doi || data.data.id),
+      url: safeExternalUrl(attributes.url),
+      _source: "datacite",
+    };
+  }
+
   function dblpAuthorText(author) {
     const raw = typeof author === "string" ? author : (author?.text || "");
     return stripLatex(raw).replace(/\s+\d{4}$/g, "").trim();
@@ -510,6 +542,7 @@ import {
     crossref_search: "CrossRef",
     crossref_doi: "CrossRef DOI enrichment",
     pubmed: "PubMed",
+    datacite: "DataCite",
     dblp: "DBLP",
     openreview: "OpenReview",
     local_arxiv: "arXiv enrichment",
@@ -521,7 +554,7 @@ import {
   function publicationSearchQueries(title, authorToken) {
     const exactTitle = String(title || "").trim();
     const author = String(authorToken || "").trim();
-    const titleTokens = titleKey(exactTitle).split(/\s+/).filter(Boolean);
+    const titleTokens = queryTitleKey(exactTitle).split(/\s+/).filter(Boolean);
     const stablePrefix = author && titleTokens.length >= 3
       ? titleTokens.slice(0, -1).join(" ")
       : "";
@@ -647,6 +680,10 @@ import {
     // so direct requests (GitHub Pages) start from the observed limits;
     // through the local proxy, which forwards the headers, the first answer
     // sets the pace and concurrency 1 holds until then.
+    // DataCite (asked directly on every origin): one request at a time,
+    // 100 ms apart (its public limit is 3000 requests per 5 minutes).
+    const datacitePacer = deps.datacitePacer || Net.createRatePacer({ concurrency: 1, maxConcurrency: 1, intervalMs: 100 });
+
     const directCrossref = /^https?:/i.test(endpoints.CROSSREF_API);
     const crossrefPacers = deps.crossrefPacers || {
       list: Net.createRatePacer({ concurrency: 1, maxConcurrency: 3, intervalMs: directCrossref ? 1000 : 0 }),
@@ -804,6 +841,65 @@ import {
       return data?.message
         ? providerRecord(crossrefToStandard(data.message), "crossref_doi", data.message.DOI || key, "doi")
         : null;
+    }
+
+    // DataCite's record of one DOI, or null when DataCite has no such DOI
+    // (404). Paced, cached (a 404 too), without credentials; a failure rejects.
+    async function searchDataCite(doi, run) {
+      const key = normalizeDoi(doi);
+      if (!key || !endpoints.DATACITE_API) return null;
+      const url = `${endpoints.DATACITE_API}${encodeURIComponent(key).replace(/%2F/gi, "/")}`;
+      const data = await metadataCache.getOrSet(`datacite-doi:${key}`, () => datacitePacer.run(() => Net.requestJson(url, {}, {
+        requestApi: Net,
+        budget: deps.dataciteBudget || Net.BUDGETS.metadata,
+        signal: run?.signal,
+        fetchOptions: { credentials: "omit" },
+        beforeAttempt: async ({ signal, attempt }) => {
+          if (attempt > 1) await datacitePacer.spacing(signal);
+        },
+        onResponse: response => datacitePacer.observe(response),
+      }), { signal: run?.signal }), cacheOptions(run));
+      const converted = dataciteToStandard(data);
+      return converted ? providerRecord(converted, "datacite", converted.doi || key, "doi") : null;
+    }
+
+    // Existence checks for the entry's identifiers that no pooled record
+    // confirms (records.identifierStates), { kind: { id, state, record } }:
+    //   DOI     Crossref's by-DOI answer, else DataCite. Absent only when
+    //           DataCite has no such DOI and Crossref answered that it has
+    //           none either (an arXiv DOI is DataCite's alone).
+    //   arXiv   its DataCite DOI 10.48550/arXiv.<id> (on every origin).
+    //   PMID, PMCID  PubMed (ESummary of the PMID, ESearch PMCn[pmc]), unless
+    //           the PubMed search itself failed.
+    // A failed request makes the state "failed", never "absent".
+    async function checkIdentifiers(original, candidates, crossrefByDoi, outcomes, run) {
+      const pubmedFailed = (outcomes || []).some(outcome => outcome.source === "pubmed" && outcome.state === "failure");
+      // Without a DataCite endpoint (custom endpoint tables) DOIs and arXiv IDs stay unchecked.
+      const pending = identifierStates(original, candidates).filter(item => item.state !== "confirmed" &&
+        (item.kind === "pmid" || item.kind === "pmcid" || !!endpoints.DATACITE_API));
+      const settled = await Promise.all(pending.map(async ({ kind, id }) => {
+        const source = kind === "pmid" || kind === "pmcid" ? "pubmed" : "datacite";
+        try {
+          if (source === "pubmed") {
+            if (pubmedFailed) return { kind, id, state: "failed", record: null, records: [] };
+            const records = await pubmed.identifierRecords(kind, id, run);
+            return { kind, id, state: records.length ? "confirmed" : "absent", record: records[0] || null, records, outcome: { source, role: "enrichment", state: "success" } };
+          }
+          const crossref = kind === "doi" && crossrefByDoi?.has(id) ? crossrefByDoi.get(id) : undefined;
+          if (crossref) return { kind, id, state: "confirmed", record: crossref, records: [] };
+          const record = await searchDataCite(kind === "doi" ? id : `10.48550/arxiv.${id}`, run);
+          const crossrefSilent = kind === "doi" && !arxivIdInText(id) && crossref === undefined;
+          return { kind, id, state: record ? "confirmed" : crossrefSilent ? "failed" : "absent", record, records: [], outcome: { source, role: "enrichment", state: "success" } };
+        } catch (error) {
+          if (Net.isCancelled(error)) throw error;
+          return { kind, id, state: "failed", record: null, records: [], outcome: { source, role: "enrichment", state: "failure", error } };
+        }
+      }));
+      return {
+        identifiers: Object.fromEntries(settled.map(({ kind, id, state, record }) => [kind, { id, state, record }])),
+        records: settled.flatMap(item => item.records),
+        outcomes: settled.map(item => item.outcome).filter(Boolean),
+      };
     }
 
     // Crossref by-DOI records for the original's and every candidate's DOI.
@@ -1070,7 +1166,13 @@ import {
       const dblpKeyEnrichment = await addDblpKeyCandidates(candidates, original, run);
       outcomes.push(...dblpKeyEnrichment.outcomes);
       candidates = dedupeRecords(relevantProviderCandidates(original, dblpKeyEnrichment.candidates));
-      const noticesByDoi = noticeIndex([...rawCandidates, ...doiEnrichment.byDoi.values()]);
+      // Without any candidate there is no work to confirm identifiers for.
+      const checks = candidates.length
+        ? await checkIdentifiers(original, candidates, doiEnrichment.byDoi, outcomes, run)
+        : { identifiers: {}, records: [], outcomes: [] };
+      outcomes.push(...checks.outcomes);
+      candidates = dedupeRecords(candidates.concat(relevantProviderCandidates(original, checks.records)));
+      const noticesByDoi = noticeIndex([...rawCandidates, ...doiEnrichment.byDoi.values(), ...checks.records]);
       candidates = withNotices(candidates, noticesByDoi);
 
       const classification = classifyAbsence(outcomes, candidates);
@@ -1083,7 +1185,10 @@ import {
         throw error;
       }
 
-      return { candidates, classification, sourceWarnings: warnings, outcomes, doiRecords: doiEnrichment.byDoi, noticesByDoi };
+      return {
+        candidates, classification, sourceWarnings: warnings, outcomes, doiRecords: doiEnrichment.byDoi, noticesByDoi,
+        identifiers: checks.identifiers,
+      };
     }
 
     function resetRateState() {
@@ -1103,6 +1208,7 @@ import {
       searchSSSearch,
       searchCrossref,
       searchCrossrefDoi,
+      searchDataCite,
       searchPubMed,
       pubmedPacer: pubmed.pacer,
       searchDblp,
@@ -1130,6 +1236,7 @@ export {
   OPENREVIEW_API,
   SS_FIELDS,
   LOCAL_ARXIV_BIBTEX,
+  DATACITE_API,
   ENDPOINTS,
   CROSSREF_SELECT,
   crossrefBibliographicQuery,
@@ -1139,6 +1246,7 @@ export {
   noticeIndex,
   withNotices,
   ssToStandard,
+  dataciteToStandard,
   dblpToStandard,
   normalizeDblpKey,
   isPublishedDblpKey,

@@ -24,9 +24,9 @@ Verifies `.bib`, `.ris` and `.nbib` files (RIS and MEDLINE are converted to BibT
 | Block code | Meaning | What to do |
 | --- | --- | --- |
 | `updated` | Auto-Updated: an authoritative record corrects or completes the entry | `lcv fix <file> --in-place`, then check again |
-| `needs_review` | every review reason (`wrong_authors`, `wrong_year`, `id_title_mismatch`, `id_conflict`, `unconfirmed_source`, `integrity`, `core_change_without_id`, `doi_round_trip_failed`, …) | replace the entry with the whole record (`lcv resolve … --bibtex`), fix the identifier or the entry's own fields, or delete it |
+| `needs_review` | every review reason (`wrong_authors`, `wrong_year`, `id_title_mismatch`, `id_conflict`, `doi_unconfirmed`, `arxiv_unconfirmed`, `pmid_unconfirmed`, `unconfirmed_source`, `integrity`, `core_change_without_id`, `doi_round_trip_failed`, …) | replace the entry with the whole record (`lcv resolve … --bibtex`), fix the identifier or the entry's own fields, or delete it. `lcv fix` never removes an identifier by itself |
 | `not_found` | no database lists the work | replace it with a record from `lcv resolve`, delete it, or have a human approve it (books, reports, guidelines) |
-| `lookup_failed` | the databases did not answer | rerun |
+| `lookup_failed` | the databases did not answer, or an identifier lookup failed (`identifier_lookup_failed`) | rerun |
 | `invalid` | the entry could not be parsed | fix the BibTeX syntax |
 | `serious_notice` | retraction, partial retraction, withdrawal, removal or expression of concern | remove the citation, or a human approves citing it |
 | `stale_approval` | the entry changed after its approval | restore it, or a human approves it again |
@@ -115,7 +115,7 @@ Record = { source, id, authoritative, type, title, authors, year, venue, doi, pm
 
 ## Network, cache and environment
 
-The providers in `docs/core/providers.js` ask the local proxy's `/api/*` paths. `cli/lib/network.mjs` answers them in Node exactly as `server/proxy_core.py` maps them: Crossref (`/works`), Semantic Scholar (`graph/v1/paper/…`), DBLP (`search/publ/api`), OpenReview (`notes/search`) and arXiv BibTeX (`arxiv.org/bibtex/<id>`, returned as `{ id, bibtex }`), with the same allowed path prefixes and Crossref's rate-limit headers passed through, so the app's pacers (Crossref ~1 search/s, PubMed 3 requests/s) follow the live limits. PubMed (NCBI E-utilities) is asked directly. Requests to any other host are refused.
+The providers in `docs/core/providers.js` ask the local proxy's `/api/*` paths. `cli/lib/network.mjs` answers them in Node exactly as `server/proxy_core.py` maps them: Crossref (`/works`), Semantic Scholar (`graph/v1/paper/…`), DBLP (`search/publ/api`), OpenReview (`notes/search`) and arXiv BibTeX (`arxiv.org/bibtex/<id>`, returned as `{ id, bibtex }`), with the same allowed path prefixes and Crossref's rate-limit headers passed through, so the app's pacers (Crossref ~1 search/s, PubMed 3 requests/s) follow the live limits. PubMed (NCBI E-utilities) and DataCite (`api.datacite.org/dois/`, which confirms DOIs and arXiv IDs no other record confirms) are asked directly. Requests to any other host are refused.
 
 Successful GET answers (HTTP 200 with a data body, never an error or an HTML page) are cached on disk for 7 days, keyed by the canonical upstream URL. `--no-cache` turns the cache off for one run; deleting the directory clears it.
 
@@ -126,12 +126,13 @@ Successful GET answers (HTTP 200 with a data body, never an error or an HTML pag
 
 ## Privacy
 
-Nothing is sent anywhere except the lookups below. No request carries an e-mail address, a `mailto` parameter, cookies or the bibliography as a whole. Requests identify themselves as `local-citation-verifier/1.0`; PubMed requests also name the tool (`tool=local-citation-verifier`).
+Nothing is sent anywhere except the lookups below. No request carries an e-mail address, a `mailto` parameter, cookies, a citation key, notes or the bibliography as a whole. Requests identify themselves as `local-citation-verifier/1.0`; PubMed requests also name the tool (`tool=local-citation-verifier`).
 
 | Data | To |
 | --- | --- |
 | Title, first three author surnames, venue, year; DOIs; arXiv IDs | `api.crossref.org`, `api.semanticscholar.org`, `dblp.org`, `api2.openreview.net`, `arxiv.org` |
-| Significant title words, first-author surname; DOI, PMID, PMCID; for ECitMatch also journal, year, volume, first page, first author's initials and the citation key | `eutils.ncbi.nlm.nih.gov` (PubMed) |
+| Significant title words, first-author surname; DOI, PMID, PMCID; for citation matching (ECitMatch) also journal, year, volume, first page and the first author's initials, with the neutral token `q1` in place of the citation key | `eutils.ncbi.nlm.nih.gov` (PubMed) |
+| DOIs (an arXiv ID as its DOI `10.48550/arXiv.<id>`) that no other record confirms | `api.datacite.org` (DataCite) |
 
 `resolve` sends the same kinds of data for the work it looks up. `keys` and `allow` work offline. The disk cache holds the providers' answers, not your files.
 

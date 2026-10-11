@@ -1,0 +1,81 @@
+{
+  "crossref": [
+    {
+      "DOI": "10.5555/jsr.2021.0101",
+      "URL": "https://doi.org/10.5555/jsr.2021.0101",
+      "type": "journal-article",
+      "title": [
+        "Calibrated Ensembles for Synthetic Citation Graphs"
+      ],
+      "author": [
+        {
+          "given": "Petra",
+          "family": "Quill"
+        },
+        {
+          "given": "Tobias",
+          "family": "Marlow"
+        },
+        {
+          "given": "Lucia",
+          "family": "Ferreira"
+        }
+      ],
+      "container-title": [
+        "Journal of Synthetic Records"
+      ],
+      "issued": {
+        "date-parts": [
+          [
+            2021
+          ]
+        ]
+      },
+      "published-print": {
+        "date-parts": [
+          [
+            2021
+          ]
+        ]
+      },
+      "volume": "12",
+      "issue": "3",
+      "page": "101-118",
+      "publisher": "Example Press"
+    }
+  ],
+  "arxiv": {
+    "2104.05678": "@misc{okafor2021contrastive,\n  title={Contrastive Pretraining for Example Table Understanding},\n  author={Okafor, Nnamdi and Lindgren, Sofia},\n  year={2021},\n  eprint={2104.05678},\n  archivePrefix={arXiv}\n}"
+  },
+  "datacite": [
+    {
+      "doi": "10.48550/arxiv.2104.05678",
+      "titles": [
+        {
+          "title": "Contrastive Pretraining for Example Table Understanding"
+        }
+      ],
+      "publicationYear": 2021,
+      "publisher": "arXiv",
+      "url": "https://arxiv.org/abs/2104.05678",
+      "types": {
+        "resourceTypeGeneral": "Preprint",
+        "bibtex": "misc"
+      },
+      "creators": [
+        {
+          "name": "Okafor, Nnamdi",
+          "nameType": "Personal",
+          "familyName": "Okafor",
+          "givenName": "Nnamdi"
+        },
+        {
+          "name": "Lindgren, Sofia",
+          "nameType": "Personal",
+          "familyName": "Lindgren",
+          "givenName": "Sofia"
+        }
+      ]
+    }
+  ]
+}
