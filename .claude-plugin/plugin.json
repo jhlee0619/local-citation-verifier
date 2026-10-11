@@ -1,0 +1,13 @@
+{
+  "name": "citation-guard",
+  "version": "0.1.0",
+  "description": "Agents obtain references only from authoritative records (lcv resolve) and cannot finish while a changed bibliography fails lcv check --strict; approvals stay human-only.",
+  "author": {
+    "name": "jhlee0619",
+    "url": "https://github.com/jhlee0619"
+  },
+  "homepage": "https://github.com/jhlee0619/local-citation-verifier",
+  "repository": "https://github.com/jhlee0619/local-citation-verifier",
+  "license": "MIT",
+  "keywords": ["bibtex", "citations", "references", "hallucination", "latex"]
+}

@@ -1,0 +1,9 @@
+# Text is stored and checked out with LF line endings, on every platform.
+* text=auto eol=lf
+# Windows batch files need CRLF.
+*.cmd text eol=crlf
+# Vendored bytes are verified against the locked npm package: no conversion.
+docs/vendor/fuzzball-2.2.3.umd.min.js -text
+docs/vendor/fuzzball.LICENSE -text
+# Test fixtures are byte-exact (crlf.bib is CRLF on purpose): no line-ending conversion.
+tests/fixtures/** -text

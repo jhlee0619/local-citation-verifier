@@ -1,0 +1,28 @@
+{
+  "name": "local-citation-verifier",
+  "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
+  "bin": {
+    "lcv": "cli/lcv.mjs"
+  },
+  "files": [
+    "cli/",
+    "docs/package.json",
+    "docs/core/",
+    "docs/vendor/",
+    "skills/",
+    "hooks/",
+    ".claude-plugin/",
+    ".codex-plugin/",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22.15"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.61.1",
+    "fuzzball": "2.2.3"
+  }
+}

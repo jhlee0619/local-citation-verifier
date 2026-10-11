@@ -1,0 +1,28 @@
+{
+  "name": "citation-guard",
+  "version": "0.1.0",
+  "description": "Agents obtain references only from authoritative records (lcv resolve) and cannot finish while a changed bibliography fails lcv check --strict; approvals stay human-only.",
+  "author": {
+    "name": "jhlee0619",
+    "url": "https://github.com/jhlee0619"
+  },
+  "homepage": "https://github.com/jhlee0619/local-citation-verifier",
+  "repository": "https://github.com/jhlee0619/local-citation-verifier",
+  "license": "MIT",
+  "keywords": ["bibtex", "citations", "references", "hallucination", "latex"],
+  "skills": "./skills/",
+  "hooks": "./hooks/codex-hooks.json",
+  "interface": {
+    "displayName": "Citation Guard",
+    "shortDescription": "Verified references only, checked before the agent finishes",
+    "longDescription": "Agents obtain references with lcv resolve from Crossref, PubMed, arXiv, DBLP and OpenReview instead of writing them from memory. A Stop hook blocks the end of a turn while changed bibliographies fail lcv check --strict, and a PreToolUse hook denies edits of the human approval list. It verifies existence and metadata, not whether a paper supports a claim.",
+    "developerName": "jhlee0619",
+    "category": "Developer Tools",
+    "capabilities": ["Read", "Write"],
+    "websiteURL": "https://github.com/jhlee0619/local-citation-verifier",
+    "defaultPrompt": [
+      "Add verified references for these claims to refs.bib",
+      "Check my bibliography with citation-guard and fix what fails"
+    ]
+  }
+}

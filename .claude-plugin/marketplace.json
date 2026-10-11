@@ -1,0 +1,15 @@
+{
+  "name": "local-citation-verifier",
+  "description": "Citation verification for coding agents",
+  "owner": {
+    "name": "jhlee0619",
+    "url": "https://github.com/jhlee0619"
+  },
+  "plugins": [
+    {
+      "name": "citation-guard",
+      "source": "./",
+      "description": "Agents obtain references only from authoritative records (lcv resolve) and cannot finish while a changed bibliography fails lcv check --strict."
+    }
+  ]
+}

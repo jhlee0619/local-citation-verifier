@@ -1,0 +1,31 @@
+{
+  "description": "citation-guard for Codex: block the end of a turn while changed bibliographies fail lcv check --strict; deny agent edits of references.allow and lcv allow",
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${PLUGIN_ROOT}/cli/hooks/stop-check.mjs\"",
+            "commandWindows": "node \"%PLUGIN_ROOT%\\cli\\hooks\\stop-check.mjs\"",
+            "timeout": 300,
+            "statusMessage": "citation-guard: checking changed references"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "^(Bash|apply_patch|Edit|Write)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${PLUGIN_ROOT}/cli/hooks/guard.mjs\"",
+            "commandWindows": "node \"%PLUGIN_ROOT%\\cli\\hooks\\guard.mjs\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

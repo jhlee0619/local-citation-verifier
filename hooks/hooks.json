@@ -1,0 +1,31 @@
+{
+  "description": "citation-guard: block the end of a turn while changed bibliographies fail lcv check --strict; deny agent edits of references.allow and lcv allow",
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/cli/hooks/stop-check.mjs"],
+            "timeout": 300,
+            "statusMessage": "citation-guard: checking changed references"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/cli/hooks/guard.mjs"],
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}
