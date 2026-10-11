@@ -24,9 +24,9 @@ Verifies `.bib`, `.ris` and `.nbib` files (RIS and MEDLINE are converted to BibT
 | Block code | Meaning | What to do |
 | --- | --- | --- |
 | `updated` | Auto-Updated: an authoritative record corrects or completes the entry | `lcv fix <file> --in-place`, then check again |
-| `needs_review` | every review reason (`wrong_authors`, `wrong_year`, `id_title_mismatch`, `id_conflict`, `doi_unconfirmed`, `arxiv_unconfirmed`, `pmid_unconfirmed`, `unconfirmed_source`, `integrity`, `core_change_without_id`, `doi_round_trip_failed`, …) | replace the entry with the whole record (`lcv resolve … --bibtex`), fix the identifier or the entry's own fields, or delete it. `lcv fix` never removes an identifier by itself |
+| `needs_review` | every review reason (`wrong_authors`, `wrong_year`, `id_title_mismatch`, `id_conflict`, `doi_unconfirmed`, `arxiv_unconfirmed`, `pmid_unconfirmed`, `unconfirmed_source`, `integrity`, `core_change_without_id`, `core_conflict`, `identifier_record_changes_type_or_venue`, `doi_round_trip_failed`, …) | replace the entry with the whole record (`lcv resolve … --bibtex`), fix the identifier or the entry's own fields, or delete it. `lcv fix` never removes an identifier by itself |
 | `not_found` | no database lists the work | replace it with a record from `lcv resolve`, delete it, or have a human approve it (books, reports, guidelines) |
-| `lookup_failed` | the databases did not answer, or an identifier lookup failed (`identifier_lookup_failed`) | rerun |
+| `lookup_failed` | the databases did not answer, an identifier lookup failed (`identifier_lookup_failed`), or a database the verdict depends on did not answer (`provider_unavailable`, listed in `unavailable_providers`: never evidence against the entry) | rerun later; do not change the entry because of it |
 | `invalid` | the entry could not be parsed | fix the BibTeX syntax |
 | `serious_notice` | retraction, partial retraction, withdrawal, removal or expression of concern | remove the citation, or a human approves citing it |
 | `stale_approval` | the entry changed after its approval | restore it, or a human approves it again |
@@ -83,7 +83,9 @@ Each command prints one JSON object with a `schema` name and `exit_code`. Fields
   summary: { entries, invalid, by_status: { <status>: n }, blocking, blocking_network_only, approved },
   files: [ { file, format: "bibtex"|"ris"|"medline", converted, allowlist, allowlist_malformed_lines,
              unused_approvals: [key], entries: [Entry] } ],
-  network: { upstream_requests, cache_hits, hosts: { <host>: n }, cache_dir, runtime_ms } }
+  network: { upstream_requests, cache_hits, hosts: { <host>: n }, cache_dir,
+             provider_alerts: [{ provider, message }],   // a bot challenge, reported once (the provider is not asked again)
+             runtime_ms } }
 
 Entry = { file, key, index, type, title,
   status: "verified"|"updated"|"needs_review"|"not_found"|"lookup_failed"|"invalid",
@@ -92,11 +94,13 @@ Entry = { file, key, index, type, title,
   record: Record|null,               // the record the status rests on
   fix: { kind: "identifier"|"additive", record: Record, changes: [{ field, from, to }] } | null,
   diffs: [{ field, entry, record }], // field differences against record
+  detail,                            // needs_review: the records and fields behind it when diffs do not show them ("" otherwise)
   candidates: [Record & { same_work, recommended }],
   lint: [{ code, ... }],             // key_year_mismatch, inproceedings_arxiv_venue, author_placeholder, missing_identifier, missing_venue
   notices: [{ type, label, doi, pmid, source, date, serious }],
   integrity: [{ code, field, message, blocking }],
   duplicate_of, source_warnings: [string], lookup_error,
+  unavailable_providers: [string],   // lookup_failed (provider_unavailable): the databases that did not answer
   fingerprint, approval: { state: "approved"|"stale", fingerprint, approved_fingerprint, reason, date } | null }
 // invalid items: { file, key, index: null, status: "invalid", reasons: [parser reason], line, column, message, blocking, block, action }
 
@@ -105,7 +109,7 @@ Record = { source, id, authoritative, type, title, authors, year, venue, doi, pm
 //         semantic_scholar_match, semantic_scholar_search (discovery only)
 ```
 
-`lcv.fix/1`: `{ schema, command, file, written, dry_run, changed, applied: [{ key, kind, record, changes }], remaining: [Entry], exit_code, network }`
+`lcv.fix/1`: `{ schema, command, file, written, dry_run, changed, applied: [{ key, kind, record, changes }], remaining: [Entry], exit_code, network }` (`network` as in `check`)
 
 `lcv.resolve/1`: `{ schema, command, query: { title, author, year, doi, pmid, pmcid, arxiv }, records: [Record & { rank, match: { confidence, identifiers, same_work, strong, title_similarity }, notices }], discovery_only: [… & { note }], picked, confident, bibtex, warnings, failures, exit_code, network }`
 
@@ -115,7 +119,7 @@ Record = { source, id, authoritative, type, title, authors, year, venue, doi, pm
 
 ## Network, cache and environment
 
-The providers in `docs/core/providers.js` ask the local proxy's `/api/*` paths. `cli/lib/network.mjs` answers them in Node exactly as `server/proxy_core.py` maps them: Crossref (`/works`), Semantic Scholar (`graph/v1/paper/…`), DBLP (`search/publ/api`), OpenReview (`notes/search`) and arXiv BibTeX (`arxiv.org/bibtex/<id>`, returned as `{ id, bibtex }`), with the same allowed path prefixes and Crossref's rate-limit headers passed through, so the app's pacers (Crossref ~1 search/s, PubMed 3 requests/s) follow the live limits. PubMed (NCBI E-utilities) and DataCite (`api.datacite.org/dois/`, which confirms DOIs and arXiv IDs no other record confirms) are asked directly. Requests to any other host are refused.
+The providers in `docs/core/providers.js` ask the local proxy's `/api/*` paths. `cli/lib/network.mjs` answers them in Node exactly as `server/proxy_core.py` maps them: Crossref (`/works`), Semantic Scholar (`graph/v1/paper/…`), DBLP (`search/publ/api`), OpenReview (`notes/search`) and arXiv BibTeX (`arxiv.org/bibtex/<id>`, returned as `{ id, bibtex }`), with the same allowed path prefixes and Crossref's rate-limit headers passed through, so the app's pacers (Crossref ~1 search/s, PubMed 3 requests/s) follow the live limits. DBLP and OpenReview are paced to one request at a time, one per second (a 429 pauses them for `Retry-After`). An HTML page in place of JSON (DBLP's "Making sure you're not a bot!" answers HTTP 200) is a rate-limit failure, never an empty result: that provider is not asked again for the rest of the run, the run reports it once (`network.provider_alerts`, a `note:` line), and every entry that needed it ends as `lookup_failed` (`provider_unavailable`, exit 3). PubMed (NCBI E-utilities) and DataCite (`api.datacite.org/dois/`, which confirms DOIs and arXiv IDs no other record confirms) are asked directly. Requests to any other host are refused.
 
 Successful GET answers (HTTP 200 with a data body, never an error or an HTML page) are cached on disk for 7 days, keyed by the canonical upstream URL. `--no-cache` turns the cache off for one run; deleting the directory clears it.
 

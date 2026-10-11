@@ -3,9 +3,9 @@
  * jump-to-preview, autoscroll), the diff rendering, the export review dialog
  * and Copy / Download. main.js passes the session accessors to initPreview.
  */
-import { html, setHTML, $, $$ } from "./dom.js?v=20261012-s15";
-import { sessionStore, storage } from "./panels.js?v=20261012-s15";
-import * as Out from "../core/output.js?v=20261012-s15";
+import { html, setHTML, $, $$ } from "./dom.js?v=20261012-s17";
+import { sessionStore, storage } from "./panels.js?v=20261012-s17";
+import * as Out from "../core/output.js?v=20261012-s17";
 
   // ─── Scheduler ─────────────────────────────────────────────────────
   // Trailing-debounced preview rebuilds owned by the active run: a burst of

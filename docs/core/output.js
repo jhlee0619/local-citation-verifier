@@ -3,10 +3,10 @@
  * status badges and counts, and export readiness with its confirmation
  * token. DOM-free and markup-free; it never changes the results it reads.
  */
-import { present, titleIsSpecific, titleKey } from "./text.js?v=20261012-s15";
-import { writeBib } from "./bibtex.js?v=20261012-s15";
-import { applyCandidateToEntry, CORE_FIELDS, entryIntegrityIssues, isAuthoritative, isSeriousNotice } from "./records.js?v=20261012-s15";
-import { applyDecision, originalDecision, resolveCandidate, reviewIssueCode } from "./verify.js?v=20261012-s15";
+import { entryVenue, present, titleIsSpecific, titleKey } from "./text.js?v=20261012-s17";
+import { writeBib } from "./bibtex.js?v=20261012-s17";
+import { applyCandidateToEntry, CORE_FIELDS, entryIntegrityIssues, isAuthoritative, isSeriousNotice } from "./records.js?v=20261012-s17";
+import { applyDecision, originalDecision, resolveCandidate, reviewIssueCode } from "./verify.js?v=20261012-s17";
 
   // ─── Preview state ─────────────────────────────────────────────────
   function isBlockingIssue(issue) {
@@ -622,7 +622,13 @@ import { applyDecision, originalDecision, resolveCandidate, reviewIssueCode } fr
     const sourceWarnings = [];
     state.entries.forEach((entry, projected) => {
       const index = state.sourceIndexes[projected];
-      for (const issue of entryIntegrityIssues(entry)) (isBlockingIssue(issue) ? blockingIssues : sourceWarnings).push({
+      // An entry-type/venue mismatch the entry's own DOI record settled
+      // (result.integrity_waived) stays settled while the exported entry
+      // keeps the entry's type and venue.
+      const original = entries[index] || {};
+      const waived = String(entry.ENTRYTYPE || "").toLowerCase() === String(original.ENTRYTYPE || "").toLowerCase() &&
+        entryVenue(entry) === entryVenue(original) ? new Set(results[index]?.integrity_waived || []) : new Set();
+      for (const issue of entryIntegrityIssues(entry).filter(item => !waived.has(item.code))) (isBlockingIssue(issue) ? blockingIssues : sourceWarnings).push({
         index,
         citationKey: entry.ID || results[index]?.entry_id || String(index),
         code: issue.code || "output_integrity_issue",

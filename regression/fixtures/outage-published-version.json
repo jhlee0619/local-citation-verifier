@@ -1,0 +1,44 @@
+{
+  "semanticscholar": [
+    {
+      "paperId": "ss-haddad2023",
+      "title": "Contrastive Pretraining for Reference Resolution",
+      "authors": [
+        {
+          "name": "Leila Haddad"
+        },
+        {
+          "name": "Tomas Novak"
+        }
+      ],
+      "year": 2023,
+      "venue": "arXiv.org",
+      "externalIds": {
+        "ArXiv": "2310.04567"
+      }
+    }
+  ],
+  "arxiv": {
+    "2310.04567": "@misc{haddad2023contrastive,\n  title={Contrastive Pretraining for Reference Resolution},\n  author={Haddad, Leila and Novak, Tomas},\n  year={2023},\n  eprint={2310.04567},\n  archivePrefix={arXiv}\n}"
+  },
+  "dblp": [
+    {
+      "authors": {
+        "author": [
+          {
+            "text": "Leila Haddad"
+          },
+          {
+            "text": "Tomas Novak"
+          }
+        ]
+      },
+      "title": "Contrastive Pretraining for Reference Resolution.",
+      "venue": "ICLR",
+      "year": "2024",
+      "type": "Conference and Workshop Papers",
+      "key": "conf/iclr/HaddadN24",
+      "ee": "https://openreview.net/forum?id=SyntheticHaddad24"
+    }
+  ]
+}

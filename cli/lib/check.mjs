@@ -83,6 +83,7 @@ function decidedRecord(entry, result, pool) {
     doiRecords: pool.doiRecords,
     noticesByDoi: pool.noticesByDoi,
     identifiers: pool.identifiers,
+    unavailableProviders: pool.unavailableProviders,
   });
   if (lookup.additive) lookup.roundTrip = { ok: result.auto_select_source === "additive" };
   const outcome = D.decide(entry, lookup);
@@ -180,6 +181,8 @@ const REVIEW_ADVICE = {
   wrong_year: "a record with this title and first author has another year: replace the entry with that record",
   id_title_mismatch: "the entry's DOI or arXiv ID belongs to another title: correct the identifier, or replace the entry with the record it names",
   id_conflict: "the DOI and the arXiv ID identify different works: keep only the right one",
+  core_conflict: "authoritative records of the entry's identifier disagree: keep the entry if it matches the version you cite, or replace it with the right record",
+  identifier_record_changes_type_or_venue: "the record the entry's DOI names would change the entry type or replace the venue with a series or shorter name, so it was not applied: keep the entry if it is right, or replace it with the whole record",
   doi_unconfirmed: "the work matches the listed record, but the entry's DOI could not be found (Crossref, DataCite): fix or remove the DOI",
   arxiv_unconfirmed: "the work matches the listed record, but the entry's arXiv ID could not be found (arXiv, DataCite): fix or remove it",
   pmid_unconfirmed: "the work matches the listed record, but the entry's PMID or PMCID could not be found in PubMed: fix or remove it",
@@ -209,14 +212,19 @@ export function adviceFor(item) {
     parts.push(`apply it with: lcv fix ${shellQuote(item.file)} --in-place (${changeText(item.fix?.changes || [])})`);
   else if (item.status === "needs_review") {
     const reason = item.reasons[0];
+    // The records and fields behind a review the diffs do not show.
+    const detail = item.detail ? ` (${item.detail})` : "";
     let text = reason === "integrity"
       ? `fix the entry's own fields: ${item.integrity.filter(issue => issue.blocking).map(issue => `${issue.code}${issue.message ? ` (${issue.message.replace(/\.$/, "")})` : ""}`).join("; ")}`
-      : REVIEW_ADVICE[reason] || `the entry disagrees with the record${diffText(item)}: replace it with the whole record (no field mixing)`;
+      : REVIEW_ADVICE[reason] ? `${REVIEW_ADVICE[reason]}${detail}`
+        : `the entry disagrees with the record${diffText(item) || detail}: replace it with the whole record (no field mixing)`;
     const command = reason !== "unconfirmed_source" && target?.authoritative ? resolveCommand(target, item.key) : "";
     if (command) text += reason === "integrity" ? `, or replace it with the whole record: ${command}` : `: ${command}`;
     parts.push(text);
   } else if (item.status === "not_found")
     parts.push("no database lists this work: replace it with a record from lcv resolve, delete it, or (book, report, guideline) ask a human to approve it with lcv allow");
+  else if (item.status === "lookup_failed" && item.reasons.includes("provider_unavailable"))
+    parts.push(`${(item.unavailable_providers || []).join(", ") || "a database"} did not answer${(item.source_warnings || []).length ? ` (${item.source_warnings.join(" ")})` : ""}, so the entry could not be checked against every database; this is not evidence against it: rerun lcv check later`);
   else if (item.status === "lookup_failed")
     parts.push(`the lookup failed (${(item.source_warnings || []).join(" ") || item.lookup_error || "network"}): rerun lcv check`);
   if (item.block.includes("serious_notice")) {
@@ -269,6 +277,7 @@ export function reportEntries({ file, document, run, poolFor, approvals }) {
       record: recordSummary(record),
       fix,
       diffs: (result.field_diffs || []).map(diff => ({ field: diff.field, entry: diff.original || "", record: diff.found || "" })),
+      detail: result.review_detail || "",
       candidates: choices.map((choice, position) => ({
         ...recordSummary(choice),
         same_work: Rec.sameWork(entry, choice),
@@ -285,6 +294,7 @@ export function reportEntries({ file, document, run, poolFor, approvals }) {
       duplicate_of: result.duplicate_of || null,
       source_warnings: [...(result.source_warnings || [])],
       lookup_error: result.lookup_error || null,
+      unavailable_providers: [...(result.unavailable_providers || [])],
       fingerprint: entryFingerprint(entry),
       approval: approvalFor(entry, approvals),
     });

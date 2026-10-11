@@ -8,7 +8,7 @@
  * The side-effect import installs the vendored fuzzball bundle as
  * globalThis.fuzzball, which tokenSortRatio reads.
  */
-import "../vendor/fuzzball-2.2.3.umd.min.js?v=20261012-s15";
+import "../vendor/fuzzball-2.2.3.umd.min.js?v=20261012-s17";
 
   // ─── Matching thresholds ───────────────────────────────────────────
   const TITLE_MATCH_THRESHOLD = 85;
@@ -474,10 +474,19 @@ import "../vendor/fuzzball-2.2.3.umd.min.js?v=20261012-s15";
     return parts.map(part => part.trim()).filter(Boolean);
   }
 
+  // The German umlaut transliterations inside a word after a consonant
+  // ("Schuetze", "Boehm", "Gaertner") fold like the umlaut itself (matchFold:
+  // ü → u), so "Sch\"{u}tze", "Schütze", "Schutze" and "Schuetze" share a
+  // key; ß is already "ss". A final "ue" ("Hue") or one after a vowel
+  // ("Bauer") is not an umlaut.
+  const UMLAUT_SPELLING = /(?<=\p{L})(?<![aeiouy])([aou])e(?=\p{L})/gu;
+
   // Comparison key of a family name: matchFold, apostrophes and hyphens
-  // joined, leading particles dropped (the last token always stays).
+  // joined, umlaut spellings folded, leading particles dropped (the last
+  // token always stays).
   function surnameKey(family) {
-    const tokens = matchFold(family).replace(/['’`-]/g, "").split(NON_WORD).filter(Boolean);
+    const tokens = matchFold(family).replace(/['’`-]/g, "").split(NON_WORD).filter(Boolean)
+      .map(token => token.replace(UMLAUT_SPELLING, "$1"));
     let start = 0;
     while (start < tokens.length - 1 && NAME_PARTICLES.has(tokens[start])) start++;
     return tokens.slice(start).join(" ");
@@ -574,26 +583,36 @@ import "../vendor/fuzzball-2.2.3.umd.min.js?v=20261012-s15";
     return a.text === b.text;
   }
 
+  // Whether every token of `shorter` matches, in order, a token of `longer`
+  // from index `from` on (match: givenTokenMatch, or equal full words only).
+  function givenSubsequence(shorter, longer, from, match) {
+    let next = from;
+    for (const token of shorter) {
+      while (next < longer.length && !match(token, longer[next])) next++;
+      if (next >= longer.length) return false;
+      next++;
+    }
+    return true;
+  }
+
   // Given names agree when either is missing, when they spell one name
-  // ("Xiaoming" = "Xiao-Ming"), or when the first tokens match and the
-  // other tokens of the shorter form match, in order, tokens of the longer
-  // one (extra middle names or initials are allowed): "J." = "John" =
-  // "John A.", but "John" ≠ "James" and "John A." ≠ "John B.".
+  // ("Xiaoming" = "Xiao-Ming"), when the first tokens match and the other
+  // tokens of the shorter form match, in order, tokens of the longer one
+  // (extra middle names or initials are allowed): "J." = "John" = "John A.",
+  // or when the shorter form's full names are, in order, full names of the
+  // longer one (a first name left out: "Pete" = "Evan Pete"). "John" ≠
+  // "James", "John A." ≠ "John B.", and "John" ≠ "Mary J." (a left-out
+  // first name never matches through an initial).
   function givensCompatible(a, b) {
     const left = givenTokens(a);
     const right = givenTokens(b);
     if (!left.length || !right.length) return true;
     const spelled = list => (list.some(token => token.initial) ? null : list.map(token => token.text).join(""));
     if (spelled(left) !== null && spelled(left) === spelled(right)) return true;
-    if (!givenTokenMatch(left[0], right[0])) return false;
     const [shorter, longer] = left.length <= right.length ? [left, right] : [right, left];
-    let next = 1;
-    for (const token of shorter.slice(1)) {
-      while (next < longer.length && !givenTokenMatch(token, longer[next])) next++;
-      if (next >= longer.length) return false;
-      next++;
-    }
-    return true;
+    if (givenTokenMatch(left[0], right[0])) return givenSubsequence(shorter.slice(1), longer, 1, givenTokenMatch);
+    const fullWords = (x, y) => !x.initial && !y.initial && x.text === y.text;
+    return givenSubsequence(shorter, longer, 0, fullWords);
   }
 
   // One person: the same surname key and compatible given names.
@@ -705,14 +724,24 @@ import "../vendor/fuzzball-2.2.3.umd.min.js?v=20261012-s15";
     return matchFold(text).replace(/&/g, " and ").replace(/^the\s+/, "").replace(/\s+/g, " ").trim();
   }
 
-  // Venue lookup key: venueText without parentheticals, years, ordinals, a
+  // A spelled-out ordinal ("thirteenth", "thirty-eighth", "twenty first").
+  const SPELLED_ORDINAL = new RegExp("^(?:(?:(?:twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)[\\s-]+)?" +
+    "(?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth)|tenth|eleventh|twelfth|thirteenth|fourteenth|" +
+    "fifteenth|sixteenth|seventeenth|eighteenth|nineteenth|twentieth|thirtieth|fortieth|fiftieth|sixtieth|" +
+    "seventieth|eightieth|ninetieth|hundredth)\\s+(?=\\S+\\s+\\S)");
+
+  // Venue lookup key: venueText without parentheticals, years, ordinals
+  // ("13th" anywhere; a spelled-out one at the start when at least two
+  // words follow: "The Thirteenth International Conference on …"), a
   // leading "Proceedings of (the)" / "Proc." and punctuation.
   function venueKey(text) {
     return venueText(text)
       .replace(/\([^()]*\)/g, " ")
       .replace(/\b(?:1[5-9]|20)\d{2}\b|\b\d+(?:st|nd|rd|th)\b/g, " ")
+      .trim()
       .replace(/^(?:proceedings|proc\.?)(?:\s+of)?(?:\s+the)?\s+/, "")
       .replace(/^the\s+/, "")
+      .replace(SPELLED_ORDINAL, "")
       .replace(NON_WORD, " ")
       .trim();
   }
@@ -726,11 +755,36 @@ import "../vendor/fuzzball-2.2.3.umd.min.js?v=20261012-s15";
     return core || key;
   }
 
+  // Journal-style names: "Transactions of the Association for Computational
+  // Linguistics" (TACL) names a conference organiser, but is a journal.
+  const JOURNAL_VENUE = /^(?:transactions|journal) of\b|\b(?:journal|transactions|letters|reviews?)\b/;
+
   function isConferenceVenueName(venue) {
     const v = venueText(venue);
+    if (JOURNAL_VENUE.test(v)) return false;
     if (/^proceedings of (?:the )?(?:national academy of sciences|ieee)\b/.test(v)) return false;
     return /(?:^|\s)(?:neurips|icml|iclr|colm|cvpr|iccv|eccv|acl|emnlp|naacl|aaai|ijcai|kdd|chi|icassp|usenix|sigmod|vldb)(?:\s|$)/.test(v) ||
       /conference on learning representations|conference on language modeling|conference on machine learning|computer vision and pattern recognition|neural information processing systems|association for computational linguistics|world wide web conference|the web conference/.test(v);
+  }
+
+  // Book and proceedings series (S17). A name that is always a series:
+  const SERIES_NAME = new RegExp("^(?:lecture notes in |lecture notes of the institute for computer sciences|" +
+    "communications in computer and information science$|proceedings of machine learning research$|lipics\\b|" +
+    "leibniz international proceedings in informatics|ceur workshop proceedings$|ifip advances in |" +
+    "acm international conference proceeding series$|smart innovation systems and technologies$|" +
+    "studies in computational intelligence$|advances in intelligent systems and computing$|" +
+    "frontiers in artificial intelligence and applications$|electronic proceedings in theoretical computer science$|" +
+    "springer proceedings in )");
+  // Among a work's several container titles, these name the series too.
+  const SERIES_TITLE = /^(?:lecture notes\b|advances in (?!neural information processing)|studies in |springer (?:proceedings|series)\b|series\b)/;
+
+  // Whether a venue name is a book or proceedings series ("Lecture Notes in
+  // Computer Science"). options.among: the name is one of several container
+  // titles, where "Advances in …" and "Studies in …" series count as well.
+  function isSeriesVenue(name, options = {}) {
+    const text = venueText(name).replace(/[^\p{L}\p{N}\s]+/gu, " ").replace(/\s+/g, " ").trim();
+    if (!text) return false;
+    return SERIES_NAME.test(text) || (options.among === true && SERIES_TITLE.test(text));
   }
 
   function isPreprintVenue(venue) {
@@ -1047,6 +1101,7 @@ export {
   venueKey,
   venueEquivalent,
   isConferenceVenueName,
+  isSeriesVenue,
   isPreprintVenue,
   abbreviateVenue,
   expandVenue,

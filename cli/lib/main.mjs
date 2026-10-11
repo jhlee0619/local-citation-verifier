@@ -41,18 +41,29 @@ function openNetwork(options, io) {
   return { stats, cache, restore };
 }
 
-function networkReport(network, started) {
+// alerts: providers that served a bot challenge (providers.providerAlerts),
+// each reported once.
+function networkReport(network, started, alerts = []) {
   return {
     upstream_requests: network.stats.requests,
     cache_hits: network.stats.cacheHits,
     hosts: network.stats.hosts,
     cache_dir: network.cache?.dir || null,
+    provider_alerts: alerts,
     runtime_ms: Date.now() - started,
   };
 }
 
 function networkText(report) {
-  return `network: ${report.upstream_requests} upstream requests, ${report.cache_hits} cached answers, ${(report.runtime_ms / 1000).toFixed(1)} s`;
+  const lines = (report.provider_alerts || []).map(alert =>
+    `note: ${alert.message}: ${alert.provider} was not asked again during this run; entries that needed it are Lookup failed (rerun later)`);
+  return [...lines, `network: ${report.upstream_requests} upstream requests, ${report.cache_hits} cached answers, ${(report.runtime_ms / 1000).toFixed(1)} s`].join("\n");
+}
+
+function mergeAlerts(...lists) {
+  const out = [];
+  for (const alert of lists.flat()) if (!out.some(item => item.provider === alert.provider)) out.push(alert);
+  return out;
 }
 
 function progressFor(io, err) {
@@ -142,8 +153,8 @@ async function runCheck({ options, positionals }, io, out, err) {
   const progress = progressFor(io, err);
   const network = openNetwork(options, io);
   const files = [];
+  const providers = Check.createCliProviders();
   try {
-    const providers = Check.createCliProviders();
     for (const file of positionals) files.push((await verifyFile(file, options, providers, progress)).report);
   } finally {
     network.restore();
@@ -158,7 +169,7 @@ async function runCheck({ options, positionals }, io, out, err) {
     exit_code: exitCode,
     summary: summaryOf(items),
     files,
-    network: networkReport(network, started),
+    network: networkReport(network, started, providers.providerAlerts()),
   };
   out.write(line(options.json ? JSON.stringify(report) : checkText(report, options.verbose)));
   return exitCode;
@@ -172,11 +183,14 @@ async function runFix({ options, positionals }, io, out, err) {
   const progress = progressFor(io, err);
   const network = openNetwork(options, io);
   let verified;
+  let alerts = [];
   try {
     const head = Check.loadBibliography(readText(file));
     if (head.format !== "bibtex")
       throw new UsageError(`lcv fix rewrites BibTeX files only; ${file} is ${head.format === "ris" ? "RIS" : "MEDLINE"}`);
-    verified = await verifyFile(file, options, Check.createCliProviders(), progress);
+    const providers = Check.createCliProviders();
+    verified = await verifyFile(file, options, providers, progress);
+    alerts = providers.providerAlerts();
   } finally {
     network.restore();
     if (progress && !io.progress) process.stderr.write("\r\x1b[K");
@@ -193,11 +207,13 @@ async function runFix({ options, positionals }, io, out, err) {
   for (let pass = 2; target && fixed !== text && pass <= FIX_PASSES; pass++) {
     fs.writeFileSync(target, fixed);
     const network = openNetwork(options, io);
+    const providers = Check.createCliProviders();
     try {
-      ({ text, loaded, run, projected, report } = await verifyFile(target, options, Check.createCliProviders(), progress));
+      ({ text, loaded, run, projected, report } = await verifyFile(target, options, providers, progress));
     } finally {
       network.restore();
     }
+    alerts = mergeAlerts(alerts, providers.providerAlerts());
     fixed = Check.fixedText(loaded.document, run, projected);
     applied.push(...appliedNow(report.entries));
   }
@@ -229,7 +245,7 @@ async function runFix({ options, positionals }, io, out, err) {
     applied,
     remaining,
     exit_code: exitCode,
-    network: networkReport(network, started),
+    network: networkReport(network, started, alerts),
   };
   const stream = options.output === "-" ? err : out;
   if (options.json) {

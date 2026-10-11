@@ -7,8 +7,9 @@
 // provider lookups → verdict → strict gate) with the services replaced by a
 // fake transport, and the web page's export readiness (core/output.js
 // prepareExport) on the same verification. Fabricated references must never
-// pass; the positive controls measure over-blocking. A summary table ends
-// the run.
+// pass; the positive controls measure over-blocking; a provider outage must
+// stay a lookup failure (rerun), never a verdict. A summary table ends the
+// run.
 import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
@@ -47,16 +48,23 @@ const Audit = await import("../docs/core/audit.js");
 //   datacite         DataCite DOI attributes (else 404)
 //   dblp             DBLP hits (info objects): every query answers them all
 //   arxiv            { id: BibTeX } for arxiv.org/bibtex/{id} (else 404)
-// Semantic Scholar, OpenReview and PubMed know nothing. A host listed in a
-// case's `down` fails at the network level.
+//   semanticscholar  Semantic Scholar papers: the match query answers the
+//                    first, the search query all
+// OpenReview and PubMed know nothing. A host listed in a case's `down` fails
+// at the network level; one in `challenge` answers DBLP's bot page (HTTP 200,
+// an HTML page in place of JSON).
 const EUTILS_HEADERS = { "X-RateLimit-Limit": "100" };
 const answer = (body, status = 200, headers = {}) => new Response(typeof body === "string" ? body : JSON.stringify(body),
   { status, headers: { "content-type": typeof body === "string" ? "text/plain" : "application/json", ...headers } });
 
-function upstream(world, down = []) {
+const BOT_PAGE = "<!DOCTYPE html><html><head><title>dblp: Making sure you're not a bot!</title></head><body></body></html>";
+
+function upstream(world, down = [], challenge = []) {
   return async url => {
     const target = new URL(url);
     if (down.includes(target.host)) throw new TypeError("fetch failed");
+    if (challenge.includes(target.host))
+      return new Response(BOT_PAGE, { status: 200, headers: { "content-type": "text/html; charset=utf-8" } });
     const tail = prefix => decodeURIComponent(target.pathname.slice(prefix.length)).toLowerCase();
     switch (target.host) {
       case "api.crossref.org": {
@@ -72,8 +80,10 @@ function upstream(world, down = []) {
       }
       case "dblp.org":
         return answer({ result: { hits: { hit: (world.dblp || []).map(info => ({ info })) } } });
-      case "api.semanticscholar.org":
-        return answer({ data: [] });
+      case "api.semanticscholar.org": {
+        const papers = world.semanticscholar || [];
+        return answer({ data: target.pathname.endsWith("/match") ? papers.slice(0, 1) : papers });
+      }
       case "api2.openreview.net":
         return answer({ notes: [] });
       case "arxiv.org": {
@@ -137,8 +147,10 @@ async function exportReadiness(file) {
 // ─── Cases ───────────────────────────────────────────────────────────
 // expect: the one entry's status and review reasons, the strict exit code
 // (0 pass, 1 blocks, 3 only a failed lookup blocks) and what the export
-// still requires ([] = ready). fix: the entry passes after `lcv fix`.
-// versions: the review offers the preprint and the published version.
+// still requires ([] = ready); unavailable: the providers named as not
+// answering; alert: the provider reported once for its bot challenge.
+// fix: the entry passes after `lcv fix`. versions: the review offers the
+// preprint and the published version.
 const REVIEW = { exit: 1, export: ["decision"] };
 const CASES = [
   // The external reviewer's counterexamples.
@@ -172,6 +184,13 @@ const CASES = [
     expect: { status: "needs_review", reasons: ["core_change_without_id"], ...REVIEW } },
   { name: "fab-invented-authors", group: "fabricated", about: "real title, invented author list",
     expect: { status: "needs_review", reasons: ["wrong_authors"], ...REVIEW } },
+  // Provider outages: a verdict never rests on a provider that did not answer.
+  { name: "outage-dblp-down", fixture: "outage-dblp-only", down: ["dblp.org"], group: "outage",
+    about: "only DBLP lists the paper (no DOI), and DBLP is down",
+    expect: { status: "lookup_failed", reasons: ["provider_unavailable"], exit: 3, export: ["decision"], unavailable: ["DBLP"] } },
+  { name: "outage-dblp-challenge", fixture: "outage-published-version", challenge: ["dblp.org"], group: "outage",
+    about: "DBLP serves its bot challenge; elsewhere only the arXiv preprint is listed",
+    expect: { status: "lookup_failed", reasons: ["provider_unavailable"], exit: 3, export: ["decision"], unavailable: ["DBLP"], alert: "DBLP" } },
   // Positive controls (over-blocking).
   { name: "control-verified", group: "control", about: "entry confirmed by its own DOI",
     expect: { status: "verified", reasons: ["core_fields_match"], exit: 0, export: [] } },
@@ -179,6 +198,10 @@ const CASES = [
     expect: { status: "updated", reasons: ["additive_only"], exit: 1, export: [] }, fix: { added: ["doi"] } },
   { name: "control-preprint-published", group: "control", about: "preprint's arXiv ID with the published version's year",
     expect: { status: "needs_review", reasons: ["identifier_record_not_auto_applicable"], ...REVIEW }, versions: true },
+  { name: "control-dblp-only", fixture: "outage-dblp-only", group: "control", about: "the DBLP-only paper with DBLP answering",
+    expect: { status: "verified", reasons: ["core_fields_match"], exit: 0, export: [] } },
+  { name: "control-dblp-published", fixture: "outage-published-version", group: "control", about: "the conference version with DBLP answering",
+    expect: { status: "verified", reasons: ["core_fields_match"], exit: 0, export: [] } },
 ];
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "lcv-regression-"));
@@ -187,7 +210,7 @@ async function runCase(spec) {
   const fixture = spec.fixture || spec.name;
   const bib = path.join(FIXTURES, `${fixture}.bib`);
   const world = JSON.parse(fs.readFileSync(path.join(FIXTURES, `${fixture}.json`), "utf8"));
-  return current.run(upstream(world, spec.down), async () => {
+  return current.run(upstream(world, spec.down, spec.challenge), async () => {
     const [checked, readiness] = await Promise.all([lcv(["check", bib, "--strict"]), exportReadiness(bib)]);
     const outcome = { checked, readiness, entry: checked.report.files[0].entries[0] };
     if (spec.fix) {
@@ -229,6 +252,14 @@ for (const spec of CASES) {
     assert.equal(readiness.ready, expect.export.length === 0);
     if (expect.diff) assert.ok(entry.diffs.some(diff => diff.field === expect.diff), `the ${expect.diff} difference is shown`);
     if (spec.group === "fabricated") assert.ok(entry.blocking && !readiness.ready, "a fabricated reference never passes");
+    if (expect.unavailable) {
+      assert.deepEqual(entry.unavailable_providers, expect.unavailable, "the providers that did not answer");
+      assert.equal(entry.network_only, true, "only the outage blocks it: rerun");
+      assert.doesNotMatch(entry.action, /replace|delete|resolve|approve/i, "no action against the entry");
+      assert.match(entry.action, /rerun lcv check/);
+    }
+    if (expect.alert)
+      assert.deepEqual(checked.report.network.provider_alerts.map(alert => alert.provider), [expect.alert], "the bot challenge is reported once");
     if (spec.fix) {
       assert.deepEqual(entry.fix.changes.map(change => (change.from === null ? `+${change.field}` : change.field)), spec.fix.added.map(field => `+${field}`));
       assert.equal(fixed.code, 0, "lcv fix applies the auto-update");
@@ -272,6 +303,7 @@ test("summary: fabricated references accepted and controls wrongly blocked", asy
       strict: pass ? "passes" : fixed ? "blocks until lcv fix" : "blocks",
       export: value?.readiness?.ready ? "ready" : "held",
       versions: !!entry && !!spec.versions && offersBothVersions(entry),
+      networkOnly: !!entry?.network_only,
     });
   }
   const fabricated = rows.filter(row => row.spec.group === "fabricated");
@@ -281,6 +313,9 @@ test("summary: fabricated references accepted and controls wrongly blocked", asy
   // A control is wrongly blocked when it does not pass (directly or after
   // lcv fix), or, for the version pair, when the review lacks a version.
   const wronglyBlocked = controls.filter(row => row.error || (row.spec.versions ? !row.versions : !row.pass && !row.fixed));
+  // An outage turned into a verdict: anything but a lookup failure to rerun.
+  const outages = rows.filter(row => row.spec.group === "outage");
+  const outageVerdicts = outages.filter(row => row.error || !row.networkOnly);
   const columns = [["group", row => row.spec.group], ["case", row => row.spec.name], ["status (reasons)", row => row.status],
     ["--strict", row => row.strict], ["export", row => row.export]];
   const widths = columns.map(([title, value]) => Math.max(title.length, ...rows.map(row => value(row).length)) + 2);
@@ -291,8 +326,10 @@ test("summary: fabricated references accepted and controls wrongly blocked", asy
     ...rows.map(row => line(columns.map(([, value]) => value(row)))),
     `fabricated references accepted: ${accepted.length} of ${fabricated.length} (must be 0)`,
     `controls wrongly blocked: ${wronglyBlocked.length} of ${controls.length}`,
+    `provider outages turned into a verdict: ${outageVerdicts.length} of ${outages.length} (must be 0)`,
   ];
   for (const text of table) t.diagnostic(text);
   assert.deepEqual(accepted.map(row => row.spec.name), []);
   assert.deepEqual(wronglyBlocked.map(row => row.spec.name), []);
+  assert.deepEqual(outageVerdicts.map(row => row.spec.name), []);
 });

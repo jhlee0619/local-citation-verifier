@@ -59,7 +59,7 @@ Clear every blocking line (`KEY — STATUS — action — record`):
 | `doi_unconfirmed`, `arxiv_unconfirmed`, `pmid_unconfirmed` | The work exists but the identifier in the entry does not. Replace the whole entry with `lcv resolve` output; never invent or guess an identifier. |
 | `not_found` | Treat it as possibly fabricated. Replace it with a resolved real work, or remove it. Books, reports, guidelines and other works outside database coverage need the **user** to approve them with `lcv allow` (you must not). |
 | `serious_notice` (retracted, withdrawn, removed, expression of concern) | Do not cite it unless the text discusses the retraction itself. Tell the user. |
-| `lookup_failed` / exit 3 | Rerun later. Never assume the entry is valid. |
+| `lookup_failed` / exit 3 | Rerun later. Never assume the entry is valid. `provider_unavailable` means a database (often DBLP) did not answer: it is no evidence against the entry, so do not replace, remove or edit the entry because of it. |
 | `invalid` | Fix the BibTeX syntax at the reported line. |
 | `stale_approval` | The entry changed after a human approved it: restore it, or ask the user to approve again. |
 | `lcv keys`: missing key | Add the entry with `lcv resolve`, or correct the key in the citation. |

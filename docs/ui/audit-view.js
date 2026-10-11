@@ -4,16 +4,16 @@
  * never cancels it), result cards, skipped citations and report export.
  * main.js calls initCitationAudit() once the page is ready.
  */
-import { parseBib } from "../core/bibtex.js?v=20261012-s15";
-import { normalizeEvidenceLanguage, safeExternalUrl } from "../core/text.js?v=20261012-s15";
-import * as Judge from "../core/judge.js?v=20261012-s15";
+import { parseBib } from "../core/bibtex.js?v=20261012-s17";
+import { normalizeEvidenceLanguage, safeExternalUrl } from "../core/text.js?v=20261012-s17";
+import * as Judge from "../core/judge.js?v=20261012-s17";
 import {
   combinedVerdictLabel, combinedVerdicts, formatAuditMarkdown, insufficientBreakdown, insufficientReasonLabel,
   planAudit, runAuditContexts, skipReasonLabel, summarize, verdictLabel,
-} from "../core/audit.js?v=20261012-s15";
-import { defaultController } from "../core/verify.js?v=20261012-s15";
-import { html, setHTML } from "./dom.js?v=20261012-s15";
-import { storage } from "./panels.js?v=20261012-s15";
+} from "../core/audit.js?v=20261012-s17";
+import { defaultController } from "../core/verify.js?v=20261012-s17";
+import { html, setHTML } from "./dom.js?v=20261012-s17";
+import { storage } from "./panels.js?v=20261012-s17";
 
   const ENGINE_STORAGE = "bv-audit-engine";
   const ENGINES = Judge.ENGINE_NAMES;

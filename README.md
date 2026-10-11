@@ -18,8 +18,8 @@ Checks BibTeX references against Crossref, PubMed, arXiv, DBLP and OpenReview, a
 | Verified | Confirmed by an authoritative record |
 | Auto-updated | Same work: only missing fields added, or the entry's own identifier record applied |
 | Needs review | Conflicting metadata, wrong authors or year, another version, unconfirmed source, an identifier that cannot be found — you choose |
-| Not found | No record of this work; possibly fabricated (export asks for confirmation) |
-| Lookup failed | A database did not answer; retry |
+| Not found | No record of this work in any database, and every database it depends on answered; possibly fabricated (export asks for confirmation) |
+| Lookup failed | A database did not answer (for example DBLP rate-limited), so no verdict was reached; retry. Never evidence against the entry |
 
 ## Run locally
 

@@ -7,19 +7,19 @@
  * classification. DOM-free (reads window.location only to pick endpoints and
  * request origins).
  */
-import * as Net from "./net.js?v=20261012-s15";
-import { parseBib } from "./bibtex.js?v=20261012-s15";
-import * as PubMed from "./pubmed.js?v=20261012-s15";
+import * as Net from "./net.js?v=20261012-s17";
+import { parseBib } from "./bibtex.js?v=20261012-s17";
+import * as PubMed from "./pubmed.js?v=20261012-s17";
 import {
-  arxivIdInText, arxivYearFromId, authorNames, entryDoi, entryPmid, entryVenue, expandVenue, extractArxivId,
-  extractOpenReviewForumId, firstAuthorSearchToken, foldText, htmlToText, isPreprintVenue, MIN_TITLE_SIM,
+  arxivIdInText, arxivYearFromId, authorNames, entryDoi, entryPmcid, entryPmid, entryVenue, expandVenue, extractArxivId,
+  extractOpenReviewForumId, firstAuthorSearchToken, foldText, htmlToText, isPreprintVenue, isSeriesVenue, MIN_TITLE_SIM,
   normalizeArxivId, normalizeDoi, parseYear, queryTitleKey, safeExternalUrl, searchTitleTokens, stripLatex,
   titleKey, titleSimilarity,
-} from "./text.js?v=20261012-s15";
+} from "./text.js?v=20261012-s17";
 import {
   createRecord, dedupeRecords, directLinkKinds, identifierStates, INFO_NOTICE_TYPES,
   isCleanPublishedManifestation, mergeNotices, noticeType, recordNoticeClass, sameWork, SERIOUS_NOTICE_TYPES,
-} from "./records.js?v=20261012-s15";
+} from "./records.js?v=20261012-s17";
 
   // ─── Endpoints ─────────────────────────────────────────────────────
   // Every origin except GitHub Pages and file:// expects the local metadata
@@ -235,6 +235,41 @@ import {
     return { title: rest, notices: mergeNotices(notices, [{ type, label, doi: "", source: "title", date: "" }]) };
   }
 
+  // ─── Crossref container titles ─────────────────────────────────────
+  // A book chapter or proceedings paper may list several container titles:
+  // the series ("Lecture Notes in Computer Science") and the volume
+  // ("Medical Image Computing and Computer Assisted Intervention – MICCAI
+  // 2025"), or a volume's short and full names. The series is the one a
+  // series pattern names (text.isSeriesVenue among several), else, for a
+  // book part with an ISSN and exactly two container titles, the first
+  // (Crossref lists a book's series first); the volume is the longest of the
+  // others.
+  const BOOK_PART_TYPES = new Set(["book-chapter", "book-part", "book-section"]);
+  const PROCEEDINGS_SERIES = new RegExp("^(?:lecture notes in (?:computer science|artificial intelligence|bioinformatics|" +
+    "networks and systems|electrical engineering|business information processing)|communications in computer and " +
+    "information science|leibniz international proceedings in informatics|lipics|proceedings of machine learning research|" +
+    "ifip advances in information and communication technology|ceur workshop proceedings)\\b");
+  const PROCEEDINGS_WORDS = /\b(?:proceedings|conference|workshops?|symposi(?:um|a)|congress|colloquium|meeting)\b/i;
+  // An event acronym and its year: "MICCAI 2025", "ECCV 2020".
+  const EVENT_ACRONYM_YEAR = /\b[A-Z][A-Za-z0-9-]*[A-Z][A-Za-z0-9-]*\s*['’]?(?:19|20)\d{2}\b/;
+
+  function crossrefContainers(item, titles) {
+    const list = titles.filter(Boolean);
+    if (list.length < 2) return { volume: list[0] || "", series: "" };
+    let seriesIndex = list.findIndex(title => isSeriesVenue(title, { among: true }));
+    if (seriesIndex < 0 && list.length === 2 && BOOK_PART_TYPES.has(String(item?.type || "").toLowerCase()) &&
+        Array.isArray(item?.ISSN) && item.ISSN.length) seriesIndex = 0;
+    const volume = list.filter((_, index) => index !== seriesIndex)
+      .reduce((best, title) => (title.length > best.length ? title : best), "");
+    return { volume, series: seriesIndex >= 0 ? list[seriesIndex] : "" };
+  }
+
+  // A book volume that is a proceedings volume: its title says so (or names
+  // an event and its year), or its series publishes proceedings.
+  function isProceedingsVolume(volume, series) {
+    return PROCEEDINGS_SERIES.test(foldText(series)) || PROCEEDINGS_WORDS.test(volume) || EVENT_ACRONYM_YEAR.test(volume);
+  }
+
   // ─── Record converters ─────────────────────────────────────────────
   // Crossref text may carry HTML/JATS/MathML markup and entities (htmlToText).
   // DOIs are lower-cased (Crossref's search already answers in lower case).
@@ -273,9 +308,20 @@ import {
     if (updates.updates.length) out._updates = updates.updates;
     if (updates.noticeType) out._noticeType = updates.noticeType;
     const type = String(item.type || "").toLowerCase();
-    if (type === "proceedings-article") {
-      out.ENTRYTYPE = "inproceedings";
-      out.booktitle = container[0] || "";
+    if (type === "proceedings-article" || BOOK_PART_TYPES.has(type)) {
+      // A proceedings paper, or a chapter of a proceedings volume
+      // (@inproceedings) or of another book (@incollection): the volume is
+      // the booktitle, the series apart; all container titles are kept
+      // (_containerTitles: an entry may name any of them). A volume number
+      // that is the year (a proceedings volume numbered by its year) is no
+      // volume.
+      const { volume, series } = crossrefContainers(item, container);
+      out.ENTRYTYPE = type === "proceedings-article" || isProceedingsVolume(volume, series) ? "inproceedings" : "incollection";
+      out.booktitle = volume;
+      if (series) out.series = series;
+      if (container.filter(Boolean).length > 1) out._containerTitles = container.filter(Boolean);
+      const number = String(out.volume || "").trim();
+      if (/^\d{4}$/.test(number) && (number === out.year || number === out._onlineYear)) delete out.volume;
     } else {
       if (type === "journal-article") out.ENTRYTYPE = "article";
       out.journal = container[0] || "";
@@ -596,6 +642,7 @@ import {
   function warningText(outcome) {
     const name = SOURCE_NAMES[outcome.source] || "A metadata provider";
     const error = outcome.error || {};
+    if (error.challenge) return `${name} was rate limited (bot challenge).`;
     if (error.kind === "rate_limited" || error.status === 429)
       return `${name} was rate limited.`;
     if (error.kind === "deadline_timeout")
@@ -617,6 +664,72 @@ import {
         bySource.set(group, warning);
     }
     return [...bySource.values()];
+  }
+
+  // ─── Per-entry provider status ─────────────────────────────────────
+  // Which providers answered an entry's lookup and which failed (any failed
+  // request of theirs), by provider key.
+  const PROVIDER_NAMES = Object.freeze({
+    crossref: "Crossref", pubmed: "PubMed", datacite: "DataCite", dblp: "DBLP", openreview: "OpenReview",
+    arxiv: "arXiv", semantic_scholar: "Semantic Scholar",
+  });
+  const OUTCOME_PROVIDER = Object.freeze({
+    crossref_search: "crossref", crossref_doi: "crossref", pubmed: "pubmed", datacite: "datacite", dblp: "dblp",
+    dblp_key: "dblp", openreview: "openreview", local_arxiv: "arxiv", semantic_scholar_match: "semantic_scholar",
+    semantic_scholar_search: "semantic_scholar",
+  });
+
+  function providerStates(outcomes) {
+    const states = {};
+    for (const outcome of outcomes || []) {
+      const key = OUTCOME_PROVIDER[outcome?.source];
+      if (!key) continue;
+      if (outcome.state === "failure") states[key] = "failed";
+      else states[key] ??= "answered";
+    }
+    return states;
+  }
+
+  // Venues OpenReview hosts (and its own URLs).
+  const OPENREVIEW_VENUE = new RegExp("\\b(?:iclr|neurips|nips|icml|tmlr|colm|corl|midl|uai|aistats|automl|" +
+    "learning representations|neural information processing|machine learning research|language modeling|" +
+    "robot learning|openreview)\\b", "i");
+
+  // The authoritative providers an entry's verdict depends on, by key:
+  // Crossref and PubMed always; DataCite for a DOI or arXiv ID; arXiv for an
+  // arXiv ID (through the proxy); DBLP and OpenReview when this origin
+  // reaches them and the entry is not clearly outside their coverage.
+  // Conservatively, an entry without a PMID/PMCID or a DOI that resolved
+  // (identifierResolved) always needs DBLP; it needs OpenReview too when its
+  // venue is one OpenReview hosts, a preprint server or none.
+  function applicableProviders(original, endpoints = ENDPOINTS, { identifierResolved = false } = {}) {
+    const keys = ["crossref", "pubmed"];
+    if (endpoints.DATACITE_API && (entryDoi(original) || extractArxivId(original))) keys.push("datacite");
+    if (endpoints.LOCAL_ARXIV_BIBTEX && extractArxivId(original)) keys.push("arxiv");
+    const searchNeeded = !identifierResolved && !entryPmid(original) && !entryPmcid(original);
+    if (endpoints.DBLP_API && searchNeeded) keys.push("dblp");
+    const venue = entryVenue(original);
+    if (endpoints.OPENREVIEW_API && searchNeeded &&
+        (!venue || isPreprintVenue(venue) || OPENREVIEW_VENUE.test(`${venue} ${original?.url || ""}`)))
+      keys.push("openreview");
+    return keys;
+  }
+
+  // ─── Paced providers: DBLP and OpenReview ──────────────────────────
+  // One request at a time, one per second: neither announces its limits, and
+  // a burst of ~50 DBLP requests drew 429s and then its "Making sure you're
+  // not a bot!" page for more than 30 minutes.
+  const PACED_PROVIDER = Object.freeze({ concurrency: 1, maxConcurrency: 1, intervalMs: 1000 });
+  const BOT_CHALLENGE = /making sure you(?:'|’|&#39;|&rsquo;)re not a bot|are you a robot|captcha/i;
+
+  // An answer in place of JSON that is a bot check or portal page: HTML by
+  // its content type or body. Through the local proxy or lcv the content
+  // type says JSON whatever the body is, so the body decides too; a body
+  // that starts like JSON is JSON.
+  function isChallengePage(contentType, text) {
+    const body = String(text ?? "");
+    if (/^\s*[[{]/.test(body)) return false;
+    return /html/i.test(String(contentType || "")) || /^\s*</.test(body) || BOT_CHALLENGE.test(body.slice(0, 4096));
   }
 
   // ─── Provider adapters ─────────────────────────────────────────────
@@ -658,7 +771,10 @@ import {
    * (optional) resolves to false when the origin's metadata proxy is missing:
    * every lookup then fails as lookup_failed (reason proxy_missing).
    * deps.crossrefPacers ({ list, single }, optional) replaces the Crossref
-   * pacers, deps.pubmedPacer / deps.pubmedBudget the PubMed ones (tests).
+   * pacers, deps.pubmedPacer / deps.pubmedBudget the PubMed ones,
+   * deps.dblpPacer / deps.openreviewPacer the DBLP and OpenReview ones, and
+   * deps.clock ({ now, setTimer, clearTimer }) the clock of the default
+   * DBLP and OpenReview pacers (tests).
    */
   function createProviderAdapters(deps) {
     const { metadataCache, arxivCache, endpoints = ENDPOINTS } = deps;
@@ -683,6 +799,66 @@ import {
     // DataCite (asked directly on every origin): one request at a time,
     // 100 ms apart (its public limit is 3000 requests per 5 minutes).
     const datacitePacer = deps.datacitePacer || Net.createRatePacer({ concurrency: 1, maxConcurrency: 1, intervalMs: 100 });
+
+    // DBLP and OpenReview (PACED_PROVIDER): a 429 pauses the pacer for
+    // Retry-After (else a doubling backoff). An HTML page in place of JSON
+    // (isChallengePage: DBLP's bot challenge answers HTTP 200) is a
+    // rate-limit failure, never an empty result, and opens the provider's
+    // circuit: it is not asked again during that run. providerAlerts()
+    // reports each opened circuit once.
+    const clock = deps.clock || {};
+    const pacedProvider = (key, pacer) => ({ key, name: PROVIDER_NAMES[key], pacer, open: null });
+    const paced = {
+      dblp: pacedProvider("dblp", deps.dblpPacer || Net.createRatePacer({ ...clock, ...PACED_PROVIDER })),
+      openreview: pacedProvider("openreview", deps.openreviewPacer || Net.createRatePacer({ ...clock, ...PACED_PROVIDER })),
+    };
+    const alerts = [];
+    const now = () => (clock.now || Date.now)();
+
+    const circuitError = (provider, run) =>
+      (provider.open && provider.open.run === (run || null) ? provider.open.error : null);
+
+    // One paced JSON request. timing.spentMs (optional) adds the time the
+    // request took, never its wait in the queue.
+    async function pacedJson(provider, url, params, run, { budget = Net.BUDGETS.search, timing = null } = {}) {
+      if (circuitError(provider, run)) throw circuitError(provider, run);
+      return provider.pacer.run(async () => {
+        if (circuitError(provider, run)) throw circuitError(provider, run);
+        const started = now();
+        let contentType = "";
+        try {
+          const text = await Net.requestJson(url, params, {
+            requestApi: Net,
+            budget,
+            signal: run?.signal,
+            origin: window.location.origin,
+            responseType: "text",
+            beforeAttempt: async ({ signal, attempt }) => {
+              if (attempt > 1) await provider.pacer.spacing(signal);
+            },
+            onResponse: response => {
+              provider.pacer.observe(response);
+              contentType = response?.headers?.get?.("content-type") || "";
+            },
+          });
+          if (text === null || text === undefined) return null;
+          if (isChallengePage(contentType, text)) {
+            const error = new Net.RequestError("rate_limited", `${provider.name} rate limited / bot challenge`,
+              { challenge: true, provider: provider.key });
+            provider.open = { run: run || null, error };
+            if (!alerts.some(alert => alert.provider === provider.name)) alerts.push({ provider: provider.name, message: error.message });
+            throw error;
+          }
+          try {
+            return JSON.parse(text);
+          } catch {
+            throw new Net.RequestError("invalid_response", `${provider.name} answered with something other than JSON`);
+          }
+        } finally {
+          if (timing) timing.spentMs += now() - started;
+        }
+      }, { signal: run?.signal });
+    }
 
     const directCrossref = /^https?:/i.test(endpoints.CROSSREF_API);
     const crossrefPacers = deps.crossrefPacers || {
@@ -918,9 +1094,9 @@ import {
       return {
         byDoi,
         candidates: settled.filter(result => result.status === "fulfilled" && result.value).map(result => result.value),
-        outcomes: settled.map(result => result.status === "fulfilled"
-          ? { source: "crossref_doi", role: "enrichment", state: "success" }
-          : { source: "crossref_doi", role: "enrichment", state: "failure", error: result.reason }),
+        outcomes: settled.map((result, index) => result.status === "fulfilled"
+          ? { source: "crossref_doi", role: "enrichment", state: "success", id: dois[index] }
+          : { source: "crossref_doi", role: "enrichment", state: "failure", id: dois[index], error: result.reason }),
       };
     }
 
@@ -993,24 +1169,28 @@ import {
       };
     }
 
-    function fetchDblpData(params, run, budget = Net.BUDGETS.dblp) {
-      return fetchJSON(endpoints.DBLP_API, { ...params, format: "json" }, {
-        signal: run?.signal,
-        budget,
-      });
+    function fetchDblpData(params, run, budget = Net.BUDGETS.dblp, timing = null) {
+      return pacedJson(paced.dblp, endpoints.DBLP_API, { ...params, format: "json" }, run, { budget, timing });
     }
 
+    // One search's queries share the DBLP budget (12 s of request time; the
+    // wait for the pacer does not count).
     async function searchDblp(title, original, run) {
       const collected = [];
       const originalYear = parseYear(original?.year);
       const preferPublished = run?.settings?.preferPublished === true;
-      const deadlineAt = Net.budgetDeadline(Net.BUDGETS.dblp);
+      const timing = { spentMs: 0 };
       for (const query of dblpSearchQueries(title, original)) {
-        const budget = Net.remainingBudget(Net.BUDGETS.dblp, deadlineAt);
-        if (!budget)
+        const remaining = Net.BUDGETS.dblp.totalTimeoutMs - timing.spentMs;
+        if (remaining <= 0)
           throw new Net.RequestError("deadline_timeout", "DBLP search deadline exceeded", { scope: "total", attempts: 1 });
+        const budget = {
+          ...Net.BUDGETS.dblp,
+          attemptTimeoutMs: Math.min(Net.BUDGETS.dblp.attemptTimeoutMs, remaining),
+          totalTimeoutMs: remaining,
+        };
         const data = await metadataCache.getOrSet(metadataCacheKey("dblp", query), () =>
-          fetchDblpData({ q: query, h: "10" }, run, budget), cacheOptions(run));
+          fetchDblpData({ q: query, h: "10" }, run, budget, timing), cacheOptions(run));
         const hits = dblpHits(data);
         const candidates = hits.map(hit => {
           const converted = dblpToStandard(hit);
@@ -1055,7 +1235,8 @@ import {
       const query = openreviewSearchQuery(title, original);
       if (!query.trim()) return [];
       const data = await metadataCache.getOrSet(metadataCacheKey("openreview", `forum:${query}`), () =>
-        fetchJSON(endpoints.OPENREVIEW_API, { term: query, content: "all", source: "forum", limit: "10" }, { signal: run?.signal }), cacheOptions(run));
+        pacedJson(paced.openreview, endpoints.OPENREVIEW_API, { term: query, content: "all", source: "forum", limit: "10" }, run),
+      cacheOptions(run));
       return (data?.notes || [])
         .slice()
         .sort((a, b) => openreviewNoteScore(b, title, original) - openreviewNoteScore(a, title, original))
@@ -1119,9 +1300,9 @@ import {
           .filter(result => result.status === "fulfilled" && result.value)
           .map(result => result.value)
           .concat(candidates)),
-        outcomes: settled.map(result => result.status === "fulfilled"
-          ? { source: "local_arxiv", role: "enrichment", state: "success" }
-          : { source: "local_arxiv", role: "enrichment", state: "failure", error: result.reason }),
+        outcomes: settled.map((result, index) => result.status === "fulfilled"
+          ? { source: "local_arxiv", role: "enrichment", state: "success", id: arxivIds[index] }
+          : { source: "local_arxiv", role: "enrichment", state: "failure", id: arxivIds[index], error: result.reason }),
       };
     }
 
@@ -1185,9 +1366,17 @@ import {
         throw error;
       }
 
+      // Which providers answered; the applicable authoritative ones that
+      // failed make a verdict that rests on absence a lookup failure
+      // (verify.decide: provider_unavailable).
+      const providers = providerStates(outcomes);
+      const identifierResolved = identifierStates(original, candidates, checks.identifiers)
+        .some(item => item.kind === "doi" && item.state === "confirmed");
+      const unavailableProviders = applicableProviders(original, endpoints, { identifierResolved })
+        .filter(key => providers[key] === "failed").map(key => PROVIDER_NAMES[key]);
       return {
         candidates, classification, sourceWarnings: warnings, outcomes, doiRecords: doiEnrichment.byDoi, noticesByDoi,
-        identifiers: checks.identifiers,
+        identifiers: checks.identifiers, providers, unavailableProviders,
       };
     }
 
@@ -1203,6 +1392,9 @@ import {
     return {
       searchCandidatePool,
       resetRateState,
+      // Providers whose circuit opened (a bot challenge), once each:
+      // [{ provider, message }].
+      providerAlerts: () => alerts.map(alert => ({ ...alert })),
       // For testing - expose individual search functions
       searchSSMatch,
       searchSSSearch,
@@ -1257,5 +1449,10 @@ export {
   relevantCandidates,
   classifyAbsence,
   sourceWarnings,
+  PROVIDER_NAMES,
+  providerStates,
+  applicableProviders,
+  PACED_PROVIDER,
+  isChallengePage,
   createProviderAdapters,
 };

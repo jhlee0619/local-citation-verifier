@@ -7,11 +7,11 @@ import {
   abbreviateVenue, arxivIdInText, authorCountsCompatible, authorIntegrityIssues, authorKeys,
   authorListsEquivalent, compareAuthors, coreSignature, entryDoi, entryPmcid, entryPmid, entryVenue,
   extractArxivId, extractOpenReviewForumId, firstAuthorsCompatible, firstAuthorSurname, foldText,
-  hasTruncatedAuthorMarker, isConferenceVenueName, isCorrectionTitle, isPlaceholderPages, isPreprintVenue,
+  hasTruncatedAuthorMarker, isConferenceVenueName, isCorrectionTitle, isPlaceholderPages, isPreprintVenue, isSeriesVenue,
   keySimilarity, MIN_TITLE_SIM, normalizeArxivId, normalizeDoi, normalizePages, normalizePmcid, normalizePmid,
   noticeClass, parseYear, present, safeExternalUrl, sameCanonicalPaperUrl, shouldSuppressAuthorSuggestion,
   TITLE_MATCH_THRESHOLD, titleIsSpecific, titleKey, titleSimilarity, tokenSortRatio, venueEquivalent, venueKey,
-} from "./text.js?v=20261012-s15";
+} from "./text.js?v=20261012-s17";
 
   // ─── Fields ────────────────────────────────────────────────────────
   const COMPARED_FIELDS = [
@@ -254,7 +254,10 @@ import {
         : hasStableId ? "no_complete_direct_record" : "original_has_no_stable_id";
       return { status: "needs_review", canonical: original, candidates: records, selectedVersionClass: selectedClass, reason, linkKind: "" };
     }
-    if (!sameCoreSignature(ordered)) {
+    // Only authoritative records can disagree: a Semantic Scholar record of
+    // the same DOI may carry the arXiv year (S17).
+    const authoritative = ordered.filter(isAuthoritative);
+    if (!sameCoreSignature(authoritative.length ? authoritative : ordered)) {
       return { status: "needs_review", canonical: original, candidates: records, selectedVersionClass: selectedClass, reason: "core_conflict", linkKind: "" };
     }
     const canonical = ordered[0];
@@ -1104,11 +1107,27 @@ import {
 
   const STRONG_TITLE_SIMILARITY = 97;
 
+  // A record with several container titles (Crossref, _containerTitles: a
+  // proceedings volume's full and short names, a series) matches any of
+  // them, or a longer entry venue that contains one of them as words.
+  function containerTitleMatches(entryVenueText, record) {
+    const titles = Array.isArray(record?._containerTitles) ? record._containerTitles : [];
+    if (titles.length < 2) return false;
+    const key = venueKey(entryVenueText);
+    return titles.some(title => {
+      const other = venueKey(title);
+      return venueEquivalent(entryVenueText, title) ||
+        (!!other && key.length > other.length && ` ${key} `.includes(` ${other} `));
+    });
+  }
+
   // The entry's venue names the record's venue (or, for PubMed, its
-  // journal abbreviation, _journalAbbrev: "Nat Methods" for "Nature methods").
+  // journal abbreviation, _journalAbbrev: "Nat Methods" for "Nature methods";
+  // for Crossref, one of its container titles).
   function venueMatches(entryVenueText, record) {
     return venueEquivalent(entryVenueText, entryVenue(record)) ||
-      (present(record?._journalAbbrev) && venueEquivalent(entryVenueText, record._journalAbbrev));
+      (present(record?._journalAbbrev) && venueEquivalent(entryVenueText, record._journalAbbrev)) ||
+      containerTitleMatches(entryVenueText, record);
   }
 
   function venueConflict(entry, record) {
@@ -1130,12 +1149,14 @@ import {
   }
 
   // Versions of one work legitimately differ in year and venue, so the
-  // same-work core signatures are compared within the record's version class.
+  // same-work core signatures are compared within the record's version class,
+  // among authoritative records only (S17: a Semantic Scholar record may
+  // carry the arXiv year).
   function uniqueCoreSignature(entry, record, candidates) {
     const recordClass = versionClass(record);
     const records = [record];
     for (const other of candidates || []) {
-      if (!other || other === record || versionClass(other) !== recordClass) continue;
+      if (!other || other === record || versionClass(other) !== recordClass || !isAuthoritative(other)) continue;
       if (sameWork(entry, other)) records.push(other);
     }
     return sameCoreSignature(records);
@@ -1223,6 +1244,24 @@ import {
       PREPRINT_ENTRY_TYPES.has(a) && PREPRINT_ENTRY_TYPES.has(b);
   }
 
+  // The entry's main title: the part before its first colon ("BOLD" of
+  // "BOLD: Dataset and Metrics …"), else "".
+  function mainTitle(title) {
+    const text = String(title || "");
+    const colon = text.indexOf(":");
+    return colon > 0 ? text.slice(0, colon) : "";
+  }
+
+  // A record the entry's own identifier links whose title is the entry's
+  // main title: Crossref keeps a subtitle apart (10.1145/3442188.3445924 is
+  // titled "BOLD"), so by identifier this is the same title (S17). Matching
+  // without an identifier stays strict.
+  function sameTitleByIdentifier(entry, record) {
+    if (!directLinkKinds(entry, record).length) return false;
+    const main = titleKey(mainTitle(entry?.title));
+    return !!main && main === titleKey(record?.title);
+  }
+
   // Core fields (title, author, year, venue, entry type) of an entry against
   // a record after normalisation. A venue the entry lacks is "missing" (a
   // suggestion), never a conflict; a value the record lacks only conflicts
@@ -1230,7 +1269,8 @@ import {
   function coreComparison(entry, record) {
     const conflicts = [];
     const missing = [];
-    if (!present(record?.title) || !titleKey(entry?.title) || titleKey(entry?.title) !== titleKey(record.title)) conflicts.push("title");
+    if (!present(record?.title) || !titleKey(entry?.title) ||
+        (titleKey(entry?.title) !== titleKey(record.title) && !sameTitleByIdentifier(entry, record))) conflicts.push("title");
     if (!present(record?.author) || !authorListsEquivalent(entry?.author, record.author)) conflicts.push("author");
     const year = parseYear(entry?.year);
     if (!Number.isInteger(year) || (year !== parseYear(record?.year) && year !== parseYear(record?._onlineYear)))
@@ -1242,6 +1282,35 @@ import {
     } else if (present(recordVenueText)) missing.push("venue");
     if (!entryTypesEquivalent(entry, record)) conflicts.push("ENTRYTYPE");
     return { equal: !conflicts.length, conflicts, missing };
+  }
+
+  // The entry type a record would give the entry (applyCandidateToEntry).
+  function recordEntryType(record) {
+    return canonicalEntryType(record?.ENTRYTYPE || (record?.booktitle ? "inproceedings" : record?.journal ? "article" : "misc"));
+  }
+
+  const venueWords = text => titleKey(text).split(" ").filter(Boolean).length;
+
+  // What applying an identifier record whole would degrade (S17): "type"
+  // (another entry type; preprint types are alike for a preprint record),
+  // "series" (a series name such as Lecture Notes in Computer Science for
+  // the entry's venue) or "venue" (a shorter venue: two words fewer or
+  // more, or fewer and another venue, or none).
+  function identifierUpdateRisks(entry, record) {
+    const risks = [];
+    const before = canonicalEntryType(entry?.ENTRYTYPE);
+    const after = recordEntryType(record);
+    if (before && after !== before &&
+        !(PREPRINT_ENTRY_TYPES.has(before) && PREPRINT_ENTRY_TYPES.has(after) && versionClass(record) === "preprint"))
+      risks.push("type");
+    const entryVenueText = entryVenue(entry);
+    const recordVenueText = entryVenue(record);
+    if (present(recordVenueText) && isSeriesVenue(recordVenueText) && !isSeriesVenue(entryVenueText)) risks.push("series");
+    else if (present(entryVenueText)) {
+      const lost = venueWords(entryVenueText) - venueWords(recordVenueText);
+      if (lost >= 2 || (lost > 0 && !venueMatches(entryVenueText, record))) risks.push("venue");
+    }
+    return risks;
   }
 
   // ─── Additive-only fields ──────────────────────────────────────────
@@ -1548,6 +1617,10 @@ export {
   manualProvenance,
   mixedCoreProvenance,
   entryIntegrityIssues,
+  identifierUpdateRisks,
+  sameTitleByIdentifier,
+  canonicalEntryType,
+  recordEntryType,
   normalizeEntryForLookup,
   metadataRegressionFields,
   compareField,

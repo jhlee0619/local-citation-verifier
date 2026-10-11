@@ -49,6 +49,13 @@ def canonical_cache_key(url: str) -> str:
     return urlunparse((parsed.scheme, parsed.netloc, parsed.path, "", query, ""))
 
 
+def is_cacheable_metadata(body: bytes) -> bool:
+    """A metadata answer worth caching: a JSON body. A bot check or portal
+    page (HTML, such as DBLP's "Making sure you're not a bot!") answers HTTP
+    200 too and must never be served again from the cache."""
+    return body.lstrip()[:1] in (b"{", b"[")
+
+
 METADATA_RESPONSE_CACHE = TtlByteCache(
     METADATA_CACHE_TTL_SECONDS,
     max_entries=METADATA_CACHE_MAX_ENTRIES,

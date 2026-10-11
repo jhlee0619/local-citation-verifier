@@ -1,0 +1,51 @@
+{
+  "crossref": [
+    {
+      "DOI": "10.5555/jdl.2021.0033",
+      "URL": "https://doi.org/10.5555/jdl.2021.0033",
+      "type": "journal-article",
+      "title": [
+        "Sparse Retrieval Heads for Citation Grounding in Long Documents"
+      ],
+      "author": [
+        {
+          "given": "Marta",
+          "family": "Quintero"
+        }
+      ],
+      "container-title": [
+        "Journal of Document Learning"
+      ],
+      "issued": {
+        "date-parts": [
+          [
+            2021
+          ]
+        ]
+      },
+      "volume": "4",
+      "page": "12-30",
+      "publisher": "Example Press"
+    }
+  ],
+  "dblp": [
+    {
+      "authors": {
+        "author": [
+          {
+            "text": "Nnamdi Okafor"
+          },
+          {
+            "text": "Sara Lindqvist"
+          }
+        ]
+      },
+      "title": "Sparse Retrieval Heads for Citation Grounding.",
+      "venue": "Proceedings of the Example Symposium on Document Engineering",
+      "year": "2022",
+      "pages": "44-52",
+      "type": "Conference and Workshop Papers",
+      "key": "conf/esde/OkaforL22"
+    }
+  ]
+}

@@ -7,14 +7,15 @@
  * callbacks for everything it renders.
  */
 import {
-  entryDoi, entryPmcid, entryPmid, extractArxivId, present, stripLatex, TITLE_MATCH_THRESHOLD, titleSimilarity,
-} from "./text.js?v=20261012-s15";
-import { candidateFingerprint as recordFingerprint, CORE_FIELDS } from "./records.js?v=20261012-s15";
-import * as Rec from "./records.js?v=20261012-s15";
-import * as Ver from "./versions.js?v=20261012-s15";
-import * as Net from "./net.js?v=20261012-s15";
-import { runBoundedQueue } from "./net.js?v=20261012-s15";
-import * as Judge from "./judge.js?v=20261012-s15";
+  authorKeys, entryDoi, entryPmcid, entryPmid, entryVenue, extractArxivId, parseYear, present, stripLatex,
+  TITLE_MATCH_THRESHOLD, titleKey, titleSimilarity,
+} from "./text.js?v=20261012-s17";
+import { candidateFingerprint as recordFingerprint, CORE_FIELDS } from "./records.js?v=20261012-s17";
+import * as Rec from "./records.js?v=20261012-s17";
+import * as Ver from "./versions.js?v=20261012-s17";
+import * as Net from "./net.js?v=20261012-s17";
+import { runBoundedQueue } from "./net.js?v=20261012-s17";
+import * as Judge from "./judge.js?v=20261012-s17";
 
   // ─── Decisions ─────────────────────────────────────────────────────
   const ORIGINAL_DEFAULT_STATUSES = new Set([
@@ -561,20 +562,54 @@ import * as Judge from "./judge.js?v=20261012-s15";
   //                 authors (wrong_authors) or of another year (wrong_year),
   //                 shown as an explicit choice. Export waits for an explicit
   //                 candidate / original / exclude decision.
-  //   Not Found     no same-work record (no_matching_record); plausible
+  //                 An identifier record that would change the entry type,
+  //                 put a series name in the venue or shorten the venue is
+  //                 a review too (identifier_record_changes_type_or_venue).
+  //   Not Found     no same-work record (no_matching_record), and every
+  //                 applicable authoritative provider answered; plausible
   //                 records stay visible for an explicit choice only.
   //   Lookup failed a same-work record exists but an identifier lookup
-  //                 failed (identifier_lookup_failed): retry.
+  //                 failed (identifier_lookup_failed): retry. Also
+  //                 provider_unavailable: an applicable authoritative
+  //                 provider failed (lookup.unavailableProviders) where the
+  //                 verdict would rest on what it did not return (Not Found,
+  //                 or a review for absence: ABSENCE_REASONS).
   // Only authoritative records (Rec.isAuthoritative: not Semantic Scholar)
-  // confirm, auto-update, round-trip or show a title-only mismatch. Same-work
-  // records from Semantic Scholar alone make the entry Needs Review
-  // (unconfirmed_source), with those records as explicit choices.
+  // confirm, auto-update, round-trip, show a title-only mismatch or take
+  // part in a conflict. Same-work records from Semantic Scholar alone make
+  // the entry Needs Review (unconfirmed_source), with those records as
+  // explicit choices.
   // The judge (LLM) only recommends one of the shown choices or raises risk;
   // it never upgrades a status.
 
+  const isBlockingIssue = issue => issue.blocking !== false && issue.severity !== "warning";
+
   function blockingIntegrityIssues(entry) {
-    return Rec.entryIntegrityIssues(entry).filter(issue => issue.blocking !== false && issue.severity !== "warning");
+    return Rec.entryIntegrityIssues(entry).filter(isBlockingIssue);
   }
+
+  // The entry's own integrity issues, without an entry-type/venue mismatch
+  // that the entry's own DOI record settles: an authoritative record of the
+  // entry's DOI with the entry's type (Crossref's journal-article for an
+  // @article in "Proceedings of the AAAI Conference on Artificial
+  // Intelligence"). waived lists the codes dropped.
+  function integrityOf(entry, pool) {
+    const issues = Rec.entryIntegrityIssues(entry);
+    const doi = entryDoi(entry);
+    const type = Rec.canonicalEntryType(entry?.ENTRYTYPE);
+    const settled = !!doi && !!type && (pool || []).some(record => Rec.isAuthoritative(record) &&
+      entryDoi(record) === doi && present(record.ENTRYTYPE) && Rec.canonicalEntryType(record.ENTRYTYPE) === type);
+    if (!settled || !issues.some(issue => issue.code === "entrytype_venue_mismatch")) return { issues, waived: [] };
+    return { issues: issues.filter(issue => issue.code !== "entrytype_venue_mismatch"), waived: ["entrytype_venue_mismatch"] };
+  }
+
+  // Reasons that rest on what the providers did not return: nothing
+  // confirms the entry, or only another version or Semantic Scholar lists
+  // it. While an applicable authoritative provider failed they are lookup
+  // failures (provider_unavailable), never review verdicts.
+  const ABSENCE_REASONS = new Set([
+    "unconfirmed_source", "core_change_without_id", "version_change_without_id", "identifier_record_not_auto_applicable",
+  ]);
 
   // Records the entry's own DOI or arXiv ID links.
   function directRecords(entry, pool) {
@@ -582,9 +617,12 @@ import * as Judge from "./judge.js?v=20261012-s15";
   }
 
   // The entry's DOI/arXiv ID resolves to a record with another title (a
-  // pooled record it links, or the record an identifier check found).
+  // pooled record it links, or the record an identifier check found); a
+  // record titled with the entry's main title (before the colon) has the
+  // same title (Rec.sameTitleByIdentifier).
   function idTitleMismatch(entry, direct) {
-    return direct.some(record => titleSimilarity(entry.title, record.title) < TITLE_MATCH_THRESHOLD);
+    return direct.some(record => titleSimilarity(entry.title, record.title) < TITLE_MATCH_THRESHOLD &&
+      !Rec.sameTitleByIdentifier(entry, record));
   }
 
   // The review reason for an identifier that does not exist.
@@ -612,16 +650,44 @@ import * as Judge from "./judge.js?v=20261012-s15";
     });
   }
 
-  // Records one identifier links disagree on the core of one version (a
-  // record may answer with its online year: Rec.sameCoreSignature).
-  function coreConflict(direct) {
+  // The groups of records one identifier links that disagree on the core of
+  // one version (a record may answer with its online year:
+  // Rec.sameCoreSignature). Callers pass authoritative records only.
+  function conflictingGroups(direct) {
     const recordsByClass = new Map();
     for (const record of direct) {
       const versionClass = Rec.versionClass(record);
       if (!recordsByClass.has(versionClass)) recordsByClass.set(versionClass, []);
       recordsByClass.get(versionClass).push(record);
     }
-    return [...recordsByClass.values()].some(records => !Rec.sameCoreSignature(records));
+    return [...recordsByClass.values()].filter(records => !Rec.sameCoreSignature(records));
+  }
+
+  function coreConflict(direct) {
+    return conflictingGroups(direct).length > 0;
+  }
+
+  const recordName = record => `${record?._recordSource || record?._source || "record"}:${record?._recordId || ""}`;
+  const clip = (value, length = 60) => (String(value).length > length ? `${String(value).slice(0, length - 1)}…` : String(value));
+
+  // The core fields on which records disagree, with each record's values:
+  // "crossref_doi:10.1/x (year 2021) and dblp:conf/x (year 2020) disagree on year".
+  const CORE_VALUE = Object.freeze({
+    title: record => titleKey(record.title),
+    author: record => authorKeys(record.author).join("|"),
+    year: record => String(parseYear(record.year) || ""),
+  });
+  const CORE_SHOWN = Object.freeze({
+    title: record => `title "${clip(record.title || "")}"`,
+    author: record => `authors ${clip(record.author || "", 50)}`,
+    year: record => `year ${record.year || "none"}`,
+  });
+
+  function disagreement(records) {
+    const fields = Object.keys(CORE_VALUE).filter(field => new Set(records.map(CORE_VALUE[field])).size > 1);
+    if (!fields.length) return "";
+    const named = records.map(record => `${recordName(record)} (${fields.map(field => CORE_SHOWN[field](record)).join(", ")})`);
+    return `${named.join(" and ")} disagree on ${fields.join(", ")}`;
   }
 
   function versionInput(entry, lookup) {
@@ -691,24 +757,31 @@ import * as Judge from "./judge.js?v=20261012-s15";
   // The deterministic facts decide() and the DOI round trip need.
   function assess(entry, lookup) {
     const pool = lookup?.candidates || [];
-    const reasons = blockingIntegrityIssues(entry).length ? ["integrity"] : [];
+    const integrity = integrityOf(entry, pool);
+    const reasons = integrity.issues.some(isBlockingIssue) ? ["integrity"] : [];
     const sameWorkRecords = pool.filter(record => Rec.sameWork(entry, record));
     if (!sameWorkRecords.length) {
       const mismatch = titleOnlyMismatch(entry, pool, lookup?.choices);
       if (mismatch) reasons.push(mismatch.reason);
-      return { reasons, sameWorkRecords, direct: [], confirming: null, additive: null, titleMatch: mismatch?.record || null };
+      return {
+        reasons, sameWorkRecords, direct: [], authoritativeDirect: [], confirming: null, additive: null,
+        titleMatch: mismatch?.record || null, integrity,
+      };
     }
     // Only Semantic Scholar lists the work: nothing can confirm the entry.
     if (!sameWorkRecords.some(Rec.isAuthoritative)) reasons.push("unconfirmed_source");
     const direct = directRecords(entry, pool);
+    // Only authoritative records take part in the conflict rules: a
+    // Semantic Scholar record of the entry's DOI may carry the arXiv year.
+    const authoritativeDirect = direct.filter(Rec.isAuthoritative);
     // Every identifier the entry carries must exist, independently of the
     // work match (Rec.identifierStates): one that is definitively absent is
     // a review reason, a failed lookup leaves the entry unconfirmed.
     const identifiers = Rec.identifierStates(entry, pool, lookup?.identifiers);
     const checked = identifiers.map(item => item.record).filter(record => record && !direct.includes(record));
-    if (idTitleMismatch(entry, [...direct, ...checked])) reasons.push("id_title_mismatch");
-    if (idConflict(entry, direct)) reasons.push("id_conflict");
-    if (coreConflict(direct)) reasons.push("core_conflict");
+    if (idTitleMismatch(entry, [...authoritativeDirect, ...checked])) reasons.push("id_title_mismatch");
+    if (idConflict(entry, authoritativeDirect)) reasons.push("id_conflict");
+    if (coreConflict(authoritativeDirect)) reasons.push("core_conflict");
     for (const { kind, state } of identifiers) {
       if (state !== "absent") continue;
       const reason = (kind === "pmid" || kind === "pmcid") && pubmedIdConflict(entry, pool, sameWorkRecords)
@@ -723,7 +796,33 @@ import * as Judge from "./judge.js?v=20261012-s15";
       if (Rec.hasCriticalMetadataConflict(entry, confirming)) reasons.push("metadata_conflict");
     }
     const additive = confirming && !reasons.length ? additiveCandidate(entry, lookup) : null;
-    return { reasons, sameWorkRecords, direct, confirming, additive, identifierFailed };
+    return { reasons, sameWorkRecords, direct, authoritativeDirect, confirming, additive, identifierFailed, integrity };
+  }
+
+  // What a review names when its field rows alone do not explain it: the
+  // records that disagree and on which fields (core_conflict, id_conflict),
+  // or what applying the identifier record would change.
+  function reviewDetail(entry, reasons, assessment, record) {
+    const details = [];
+    if (reasons.includes("core_conflict"))
+      details.push(...conflictingGroups(assessment.authoritativeDirect || []).map(disagreement).filter(Boolean));
+    if (reasons.includes("id_conflict")) {
+      const linked = (assessment.authoritativeDirect || []).map(item => ({ item, kinds: Rec.directLinkKinds(entry, item) }));
+      const byDoi = linked.find(link => link.kinds.includes("doi") && !link.kinds.includes("arxiv"))?.item;
+      const byArxiv = linked.find(link => link.kinds.includes("arxiv") && !link.kinds.includes("doi"))?.item;
+      if (byDoi && byArxiv)
+        details.push(`the DOI names ${recordName(byDoi)} ("${clip(byDoi.title || "")}"), the arXiv ID ${recordName(byArxiv)} ("${clip(byArxiv.title || "")}")`);
+    }
+    if (reasons.includes("identifier_record_changes_type_or_venue") && record) {
+      const risks = Rec.identifierUpdateRisks(entry, record);
+      const venue = entryVenue(record);
+      const changes = [];
+      if (risks.includes("type")) changes.push(`the entry type @${Rec.canonicalEntryType(entry.ENTRYTYPE)} to @${Rec.recordEntryType(record)}`);
+      if (risks.includes("series")) changes.push(`the venue to "${clip(venue)}" (a series name)`);
+      if (risks.includes("venue")) changes.push(venue ? `the venue to the shorter "${clip(venue)}"` : "the venue to none");
+      if (changes.length) details.push(`applying ${recordName(record)} would change ${changes.join(" and ")}`);
+    }
+    return details.join("; ");
   }
 
   function normalizedJudgeStatus(value) {
@@ -800,6 +899,19 @@ import * as Judge from "./judge.js?v=20261012-s15";
     );
   }
 
+  // The lookup failure while applicable authoritative providers failed.
+  function providerUnavailable(base, names, record = null) {
+    return {
+      ...base,
+      status: "lookup_failed",
+      reason: "provider_unavailable",
+      reasons: ["provider_unavailable"],
+      record,
+      unavailableProviders: names.slice(),
+      lookupError: `${names.join(", ")} did not answer`,
+    };
+  }
+
   // Status, reasons, initial decision, recommended choice and default field
   // edits for one entry. Pure: the DOI round trip and the judge answer are
   // inputs (lookup.roundTrip, answer).
@@ -807,6 +919,7 @@ import * as Judge from "./judge.js?v=20261012-s15";
     const choices = lookup?.choices || [];
     const verdict = judgeVerdict(entry, lookup || { choices }, answer);
     const assessment = assess(entry, lookup);
+    const unavailable = lookup?.unavailableProviders || [];
     const base = {
       choices,
       decision: originalDecision(false),
@@ -816,12 +929,15 @@ import * as Judge from "./judge.js?v=20261012-s15";
       fieldEdits: null,
       verdict,
       notices: entryNotices(entry, lookup, assessment),
+      integrityIssues: assessment.integrity.issues,
+      integrityWaived: assessment.integrity.waived,
     };
     if (!assessment.sameWorkRecords.length) {
       // A same-title record by other authors (or of another year) is shown as
       // an explicit choice, never recommended or applied.
       if (assessment.reasons.length)
         return { ...base, status: "needs_review", reason: assessment.reasons[0], reasons: assessment.reasons, record: assessment.titleMatch };
+      if (unavailable.length) return providerUnavailable(base, unavailable);
       return { ...base, status: "not_found", reason: "no_matching_record", reasons: ["no_matching_record"] };
     }
     const reasons = assessment.reasons.slice();
@@ -830,7 +946,12 @@ import * as Judge from "./judge.js?v=20261012-s15";
       const recommended = recommendedIndex(entry, lookup, verdict);
       const shown = choices[recommended] || record ||
         choices.find(choice => Rec.sameWork(entry, choice)) || choices[0] || null;
-      return { ...base, status: "needs_review", reason: reasonList[0], reasons: reasonList, recommendedIndex: recommended, record: shown };
+      if (unavailable.length && reasonList.every(reason => ABSENCE_REASONS.has(reason)))
+        return providerUnavailable(base, unavailable, shown);
+      return {
+        ...base, status: "needs_review", reason: reasonList[0], reasons: reasonList, recommendedIndex: recommended, record: shown,
+        detail: reviewDetail(entry, reasonList, assessment, record),
+      };
     };
     if (reasons.length) return review(reasons);
     // An identifier lookup failed: nothing is confirmed until a retry.
@@ -848,6 +969,9 @@ import * as Judge from "./judge.js?v=20261012-s15";
     if (assessment.confirming) {
       const additive = assessment.additive;
       if (additive) {
+        // Crossref did not answer the round trip: a lookup failure, not a review.
+        if (lookup.roundTrip?.error)
+          return providerUnavailable(base, [...new Set([...unavailable, "Crossref"])], additive.record);
         if (!lookup.roundTrip?.ok) return review(["doi_round_trip_failed"], additive.record);
         return {
           ...base,
@@ -864,6 +988,9 @@ import * as Judge from "./judge.js?v=20261012-s15";
 
     const auto = lookup.autoRecord;
     if (auto) {
+      // Applied whole, it would change the entry type, put a series in the
+      // venue or shorten the venue: a review, never an auto-update.
+      if (Rec.identifierUpdateRisks(entry, auto).length) return review(["identifier_record_changes_type_or_venue"], auto);
       const index = choices.findIndex(choice => sameRecord(choice, auto));
       return {
         ...base,
@@ -944,6 +1071,7 @@ import * as Judge from "./judge.js?v=20261012-s15";
       doiRecords: options.doiRecords || new Map(),
       noticesByDoi: options.noticesByDoi || new Map(),
       identifiers: options.identifiers || {},
+      unavailableProviders: options.unavailableProviders || [],
       roundTrip: null,
       pendingJudge: null,
     };
@@ -957,7 +1085,8 @@ import * as Judge from "./judge.js?v=20261012-s15";
     const judge = ctx.judge || DEFAULT_JUDGE;
     const pool = await ctx.providers.searchCandidatePool(title, lookupEntry, run);
     if (!controller.isActive(run)) return null;
-    if (!pool.candidates.length) return { absence: "not_found", sourceWarnings: pool.sourceWarnings };
+    if (!pool.candidates.length)
+      return { absence: "not_found", sourceWarnings: pool.sourceWarnings, unavailableProviders: pool.unavailableProviders || [] };
     const original = originalSnapshot;
     const preferPublished = run.settings.preferPublished;
     const lookup = buildLookup(original, pool.candidates, {
@@ -966,6 +1095,7 @@ import * as Judge from "./judge.js?v=20261012-s15";
       doiRecords: pool.doiRecords,
       noticesByDoi: pool.noticesByDoi,
       identifiers: pool.identifiers,
+      unavailableProviders: pool.unavailableProviders,
     });
     const { clustered, choices } = lookup;
     if (lookup.additive) {
@@ -1025,6 +1155,17 @@ import * as Judge from "./judge.js?v=20261012-s15";
     };
   }
 
+  // A review whose field rows show no difference names its reasons and the
+  // record it shows (another version's fields are not compared).
+  function genericDetail(entry, outcome, found) {
+    const reasons = (outcome.reasons || []).join(", ");
+    if (!found) return reasons;
+    const [entryClass, foundClass] = [Rec.manifestationClass(entry), Rec.manifestationClass(found)];
+    if (entryClass !== "unknown" && foundClass !== "unknown" && entryClass !== foundClass)
+      return `${reasons}: ${recordName(found)} is the ${foundClass} version, the entry cites the ${entryClass} version`;
+    return `${reasons}: ${recordName(found)} shows no field that differs from the entry`;
+  }
+
   // The lookup each published result came from (for the judge patch).
   const RESULT_LOOKUPS = new WeakMap();
 
@@ -1064,6 +1205,9 @@ import * as Judge from "./judge.js?v=20261012-s15";
       field_diffs: comparison.field_diffs,
       suggested: comparison.suggested,
       found_title: found ? (found.title || "") : "",
+      review_detail: status === "needs_review"
+        ? outcome.detail || (!comparison.field_diffs.length ? genericDetail(entry, outcome, found) : "")
+        : "",
       ai_status: answer?.status || "",
       ai_reason: answer?.reason || "",
       ai_risk_flags: answer?.riskFlags || [],
@@ -1078,7 +1222,9 @@ import * as Judge from "./judge.js?v=20261012-s15";
       duplicate_of: run.duplicateOfByIndex[index] || null,
       lookup_error: null,
       source_warnings: [],
-      integrity_issues: Rec.entryIntegrityIssues(entry),
+      unavailable_providers: outcome.unavailableProviders || [],
+      integrity_issues: outcome.integrityIssues || Rec.entryIntegrityIssues(entry),
+      integrity_waived: outcome.integrityWaived || [],
       notices: outcome.notices || [],
       run_snapshot: run.settings,
       ...(outcome.lookupError ? { lookup_error: outcome.lookupError } : {}),
@@ -1112,7 +1258,12 @@ import * as Judge from "./judge.js?v=20261012-s15";
       return r;
     }
     if (!lookup || lookup.absence) {
-      const r = buildResult(run, entry, index, bareOutcome(entry, "not_found", "no_matching_record"));
+      // Nothing found while an applicable authoritative provider failed: a
+      // lookup failure, never Not Found.
+      const unavailable = lookup?.unavailableProviders || [];
+      const outcome = bareOutcome(entry, "not_found", "no_matching_record");
+      const r = buildResult(run, entry, index, unavailable.length && outcome.status === "not_found"
+        ? providerUnavailable(outcome, unavailable) : outcome);
       r.source_warnings = lookup?.sourceWarnings || [];
       return r;
     }

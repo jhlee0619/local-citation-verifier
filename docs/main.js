@@ -1,16 +1,16 @@
 // Entry module: wires the ui/ modules to core/verify.js and owns the
 // verification session (start, retry, cancel) and the user's decisions.
-import * as Bib from "./core/bibtex.js?v=20261012-s15";
-import * as Formats from "./core/formats.js?v=20261012-s15";
-import * as Net from "./core/net.js?v=20261012-s15";
-import * as Prov from "./core/providers.js?v=20261012-s15";
-import * as D from "./core/verify.js?v=20261012-s15";
-import * as Out from "./core/output.js?v=20261012-s15";
-import { $ } from "./ui/dom.js?v=20261012-s15";
-import * as Cards from "./ui/cards.js?v=20261012-s15";
-import * as Preview from "./ui/preview.js?v=20261012-s15";
-import * as Panels from "./ui/panels.js?v=20261012-s15";
-import { initCitationAudit } from "./ui/audit-view.js?v=20261012-s15";
+import * as Bib from "./core/bibtex.js?v=20261012-s17";
+import * as Formats from "./core/formats.js?v=20261012-s17";
+import * as Net from "./core/net.js?v=20261012-s17";
+import * as Prov from "./core/providers.js?v=20261012-s17";
+import * as D from "./core/verify.js?v=20261012-s17";
+import * as Out from "./core/output.js?v=20261012-s17";
+import { $ } from "./ui/dom.js?v=20261012-s17";
+import * as Cards from "./ui/cards.js?v=20261012-s17";
+import * as Preview from "./ui/preview.js?v=20261012-s17";
+import * as Panels from "./ui/panels.js?v=20261012-s17";
+import { initCitationAudit } from "./ui/audit-view.js?v=20261012-s17";
 
   const controller = D.defaultController;
   const RESOLVED = { isReviewResolved: D.isReviewResolved };

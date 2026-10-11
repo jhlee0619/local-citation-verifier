@@ -41,6 +41,7 @@ from .proxy_core import (
     fetch_upstream,
     first_model_id,
     get_json,
+    is_cacheable_metadata,
     make_chat_payload,
     parse_arxiv_id,
     parse_json_object,
@@ -253,7 +254,7 @@ class CitationRequestHandler(SimpleHTTPRequestHandler):
             headers: dict[str, str] = {}
             if cached is None:
                 status, body, headers = fetch_upstream(upstream_url, timeout_seconds=12.0)
-                if status == HTTPStatus.OK:
+                if status == HTTPStatus.OK and is_cacheable_metadata(body):
                     METADATA_RESPONSE_CACHE.set(key, status, body)
             else:
                 status, body = cached
